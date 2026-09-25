@@ -70,3 +70,24 @@ The spend cap plus the dedupe/pre-filter step do most of the work — together t
 
 Want me to sketch what the dedupe-and-prefilter step would actually look like, given it's the piece that does double duty (saves money *and* is genuinely part of the pipeline logic)?
 
+
+## Follow-up decisions (2026-09-25)
+
+A few design questions came up once Phase 2 was built (the first RSS source agent), worth
+recording alongside the original brief above:
+
+**Non-programmer source configuration.** Plain RSS-based sources (like the THE unijobs feed
+built in Phase 2) will be config-driven — listed by name and feed URL in a config file, no code
+required to add one. Sources that need bespoke API handling (e.g. Adzuna) still need code, via a
+small documented plugin interface (`fetch_listings() -> list[Listing]`).
+
+**Batch API.** Used specifically for the fit-agent scoring stages (Haiku coarse pass, Sonnet
+detailed pass) — the high-volume, no-rush part of the pipeline this brief's cost-control
+discussion already had in mind. Built first as ordinary synchronous calls (easier to learn from),
+then switched over to the Anthropic Message Batches API as a dedicated cost-optimization step
+once the synchronous version works.
+
+**Results & status visibility.** Results are viewed through a small local web dashboard (Flask)
+reading from the SQLite store, rather than a plain Markdown report file. The dashboard also
+doubles as the feedback-capture UI — relevant/not-relevant buttons per listing — rather than a
+CLI prompt.

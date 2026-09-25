@@ -1,0 +1,41 @@
+# Plain RSS job sources. Add a new one here - no code required.
+#
+# Fields per feed:
+#   name           - short identifier, used in logs/output
+#   url            - the feed URL
+#   query          - query string params to send with the request. Use the literal text
+#                    "{keywords}" anywhere a value should be replaced with the search term at
+#                    fetch time. Leave as {} for a feed that takes no query (e.g. one fixed
+#                    category feed like We Work Remotely below).
+#   title_format   - "company_colon_title" if entries look like "COMPANY NAME: Role title"
+#                    (common on academic job boards), or "plain" to use the title as-is with no
+#                    company extracted.
+#   location       - "summary_last_line" if the location is the last line of the description
+#                    text, "field:<name>" to read a named field feedparser already extracted
+#                    (e.g. "field:region"), or "none" if there isn't one.
+#
+# If a feed's structure doesn't fit any of the options above, it needs a bespoke source module
+# instead - see src/job_search_agent/sources/__init__.py for that interface.
+
+feeds:
+  - name: the_unijobs
+    url: "https://www.timeshighereducation.com/unijobs/jobsrss/"
+    query:
+      keywords: "{keywords}"
+      countrycode: "GB"
+    title_format: "company_colon_title"
+    location: "summary_last_line"
+
+  - name: nature_careers
+    url: "https://www.nature.com/naturecareers/jobsrss/"
+    query:
+      keywords: "{keywords}"
+      countrycode: "GB"
+    title_format: "company_colon_title"
+    location: "summary_last_line"
+
+  - name: we_work_remotely_programming
+    url: "https://weworkremotely.com/categories/remote-programming-jobs.rss"
+    query: {}
+    title_format: "company_colon_title"
+    location: "field:region"

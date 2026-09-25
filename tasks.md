@@ -13,7 +13,7 @@ search tool, and the Anthropic API.
 ## Architecture at a glance
 
 ```
-                 +--> THE unijobs RSS ------------+
+                 +--> config-driven RSS feeds ----+
 sources          +--> Adzuna API -----------------+--> normalize+dedupe (SQLite) -> rule-based
                  +--> general web search (jobs) --+        pre-filter
                                                               |
@@ -26,10 +26,10 @@ sources          +--> Adzuna API -----------------+--> normalize+dedupe (SQLite)
                                                               v
                  general web search (companies) --> "why follow" agent --+
                                                                           v
-                                                        report (jobs + companies to watch)
+                                          local web dashboard (jobs + companies to watch)
                                                                           |
                                                                           v
-                                            user feedback (relevant / not relevant)
+                                    feedback buttons (relevant / not relevant) on the dashboard
                                                                           |
                                                                           v
                                           feedback store -> feeds back into agent prompts
@@ -68,6 +68,15 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 > unijobs**, a comparable UK/international academic & research jobs board that does have a
 > working RSS feed with keyword search:
 > `https://www.timeshighereducation.com/unijobs/jobsrss/?keywords=<query>&countrycode=GB`
+>
+> Also checked NHS recruitment (jobs.nhs.uk, trac.jobs) for the same reason — neither has a
+> public RSS feed either (jobs.nhs.uk: no feed anywhere on the site; trac.jobs: blocks
+> non-browser requests outright). Not usable as a source this way.
+>
+> Now config-driven via `config/sources.yaml` — three feeds configured so far: `the_unijobs`,
+> `nature_careers` (same underlying platform, also has a working feed), and
+> `we_work_remotely_programming` (a different platform entirely, proving the config format
+> generalizes).
 
 - [x] Write a plain-Python fetcher for one THE unijobs RSS feed (no LLM involved yet)
 - [x] Parse each entry into a common `Listing` shape: title, company, url, location, posted date,
@@ -75,6 +84,11 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 - [x] Print parsed listings to console to confirm parsing works
 - [x] Design the `Listing` shape so other source agents (structured or search-based) can produce
       the same shape later
+- [x] Generalize the fetcher into a config-driven generic RSS source (`config/sources.yaml`: name
+      + feed URL + optional query params), so a non-programmer can add a new plain RSS board
+      without writing code
+- [x] Document a simple plugin interface (`fetch_listings() -> list[Listing]`) for anyone adding
+      a bespoke API-based source (e.g. Adzuna, Phase 13) that can't be pure config
 
 ## Phase 3 — General web search source agent (jobs)
 
@@ -107,6 +121,10 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 
 ## Phase 6 — Fit agent v1 (coarse pass, Haiku)
 
+> Built here as ordinary synchronous calls, one per listing, so it's easy to see what's
+> happening. Phase 12 switches this and Phase 7 over to the Anthropic Message Batches API (50%
+> cheaper, and nothing here needs an instant answer) once the synchronous version works.
+
 - [ ] Build the first real fit agent: given one listing + your profile, ask Haiku for a coarse
       yes/no/maybe fit judgement with a one-line reason
 - [ ] Define the structured output contract (e.g. JSON: `{verdict, reason}`)
@@ -121,21 +139,20 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 - [ ] Store detailed verdicts in the DB alongside the coarse ones
 - [ ] Compare cost of running Sonnet on everything vs. only on Haiku's survivors
 
-## Phase 8 — Report output
+## Phase 8 — Results dashboard
 
-- [ ] Write matched listings (with scores + rationale) out to a Markdown report, grouped by
-      score/verdict
-- [ ] Include enough info per listing to decide without opening the link (title, company,
-      location, score, why, link)
+- [ ] Add Flask, set up a minimal local web app that reads directly from the SQLite store (no
+      separate report file)
+- [ ] Build a results page: matched listings grouped by score/verdict, with enough info to decide
+      without opening the link (title, company, location, score, why, link)
 - [ ] Run the full pipeline end to end for the first time: fetch (RSS + search) → filter → score
-      → report
+      → view results in the dashboard
 
 ## Phase 9 — User feedback capture
 
-- [ ] Add a simple way to mark a listing relevant/not relevant (CLI prompt, or a small flag file/
-      command reading listing IDs from the report)
-- [ ] Store feedback in the DB against the listing
-- [ ] Confirm feedback persists across runs
+- [ ] Add relevant/not-relevant buttons on the dashboard for each listing, writing feedback
+      straight to the SQLite store
+- [ ] Confirm feedback persists across runs and page reloads
 
 ## Phase 10 — Learning from feedback
 
@@ -154,6 +171,10 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 
 ## Phase 12 — Cost controls & observability
 
+- [ ] Switch the Phase 6/7 fit-agent calls to the Anthropic Message Batches API (submit a batch,
+      poll for completion, retrieve results) instead of one-by-one synchronous calls — 50%
+      cheaper for the same requests, using the plain `anthropic` Python SDK rather than
+      `claude-agent-sdk` (which is built for synchronous tool-use loops, not batch submission)
 - [ ] Add prompt caching for the profile/criteria block (identical across every fit-agent call in
       a run)
 - [ ] Track and print total run cost (calls, tokens, $ estimate) at the end of every run
@@ -190,7 +211,7 @@ This is a different kind of output from a job listing: not "here's a role to app
       relevance rather than scoring against a specific job posting
 - [ ] Store company leads in their own table, with the same feedback mechanism as listings
       (relevant / not relevant / already known)
-- [ ] Add a "Companies to watch" section to the report, separate from job listings
+- [ ] Add a "Companies to watch" section to the dashboard, separate from job listings
 - [ ] Feed company-lead feedback into the Phase 10 learning loop the same way as listing feedback
 
 ## Phase 16 — Make it reusable by others
@@ -204,4 +225,5 @@ This is a different kind of output from a job listing: not "here's a role to app
 
 - [ ] Wire the coordinator to run on a schedule (cron or similar) with the spend guard from
       Phase 12 protecting unattended runs
-- [ ] Decide what happens to reports/feedback prompts when nobody's watching a scheduled run
+- [ ] Decide what a scheduled run should do differently when nobody's watching the dashboard live
+      (e.g. an email/notification summary pointing back to it)

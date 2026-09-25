@@ -43,7 +43,8 @@ status):
 ```
 sources (structured feeds/APIs + general web search) -> normalize+dedupe (SQLite)
   -> rule-based pre-filter -> fit agent (Haiku coarse pass) -> fit agent (Sonnet detailed pass)
-  -> report output -> user feedback (relevant / not relevant) -> feeds back into future prompts
+  -> local web dashboard (Flask) -> feedback buttons (relevant / not relevant) on the dashboard
+  -> feeds back into future prompts
 ```
 
 A few design decisions that shape how new code should fit in:
@@ -62,7 +63,14 @@ A few design decisions that shape how new code should fit in:
   outside this system).
 - **Cost controls are part of the design, not an afterthought**: turn caps, spend guards, and
   prompt caching for the repeated profile/criteria block are explicit phases in `tasks.md`, not
-  optional hardening.
+  optional hardening. The fit-agent stages (Phase 6/7) are built first as ordinary synchronous
+  calls, then switched to the Anthropic Message Batches API in Phase 12 — that's a deliberate
+  two-step sequence (get it working, then make it cheaper), not an oversight if you find
+  synchronous calls still in place.
 - All personal data (CV, criteria, source list) is meant to live in config/data files, not
   hardcoded, so the project stays reusable by someone other than the original user (this is an
-  explicit goal, not just good practice, per `docs/brief.md`).
+  explicit goal, not just good practice, per `docs/brief.md`). Plain RSS sources are meant to be
+  addable via a config file alone (no code); only bespoke API sources need actual code, via a
+  documented `fetch_listings() -> list[Listing]` plugin interface.
+- Results are viewed and feedback is given through a local Flask dashboard reading straight from
+  the SQLite store (Phase 8/9) — there is no separate Markdown report output.
