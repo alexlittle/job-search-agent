@@ -53,12 +53,12 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 
 ## Phase 1 — Your profile (CV + preferences)
 
-- [ ] Decide the profile format (e.g. a `profile/` folder: `cv.md` + `criteria.yaml`)
-- [ ] Define `criteria.yaml` fields: target roles, locations, salary band, must-haves,
+- [x] Decide the profile format (e.g. a `profile/` folder: `cv.md` + `criteria.yaml`)
+- [x] Define `criteria.yaml` fields: target roles, locations, salary band, must-haves,
       dealbreakers, keywords to boost/avoid
-- [ ] Write a loader that reads CV + criteria into a single structured object/string the agents
+- [x] Write a loader that reads CV + criteria into a single structured object/string the agents
       can use as context
-- [ ] Sanity check: print the loaded profile back out correctly
+- [x] Sanity check: print the loaded profile back out correctly
 
 ## Phase 2 — First source agent (jobs.ac.uk RSS)
 
