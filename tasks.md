@@ -13,7 +13,7 @@ search tool, and the Anthropic API.
 ## Architecture at a glance
 
 ```
-                 +--> jobs.ac.uk RSS ------------+
+                 +--> THE unijobs RSS ------------+
 sources          +--> Adzuna API -----------------+--> normalize+dedupe (SQLite) -> rule-based
                  +--> general web search (jobs) --+        pre-filter
                                                               |
@@ -60,13 +60,20 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
       can use as context
 - [x] Sanity check: print the loaded profile back out correctly
 
-## Phase 2 — First source agent (jobs.ac.uk RSS)
+## Phase 2 — First source agent (THE unijobs RSS)
 
-- [ ] Write a plain-Python fetcher for one jobs.ac.uk RSS feed (no LLM involved yet)
-- [ ] Parse each entry into a common `Listing` shape: title, company, url, location, posted date,
+> Originally planned around jobs.ac.uk, but they no longer publish a public RSS feed (checked
+> 2026-09-25 — no autodiscovery link, no working feed URL pattern; they've moved to an
+> email-only "Job Alerts" account feature instead). Swapped to **THE (Times Higher Education)
+> unijobs**, a comparable UK/international academic & research jobs board that does have a
+> working RSS feed with keyword search:
+> `https://www.timeshighereducation.com/unijobs/jobsrss/?keywords=<query>&countrycode=GB`
+
+- [x] Write a plain-Python fetcher for one THE unijobs RSS feed (no LLM involved yet)
+- [x] Parse each entry into a common `Listing` shape: title, company, url, location, posted date,
       raw description, source
-- [ ] Print parsed listings to console to confirm parsing works
-- [ ] Design the `Listing` shape so other source agents (structured or search-based) can produce
+- [x] Print parsed listings to console to confirm parsing works
+- [x] Design the `Listing` shape so other source agents (structured or search-based) can produce
       the same shape later
 
 ## Phase 3 — General web search source agent (jobs)
