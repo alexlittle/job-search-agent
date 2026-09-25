@@ -30,9 +30,17 @@ Scripts authenticate to Claude with a dedicated Anthropic Console API key (`ANTH
 `.env`, gitignored), **not** the ambient `claude` CLI login used for interactive Claude Code
 sessions on this machine. This is intentional: the project's cost-control design (spend caps,
 model tiering, Batch API) assumes metered Console billing, so every `ClaudeAgentOptions` call
-should pass the key explicitly via `env={"ANTHROPIC_API_KEY": ...}` rather than relying on
-whatever the ambient environment happens to be authenticated as. See `src/job_search_agent/hello_agent.py`
-for the pattern.
+should pass the key explicitly via `env=anthropic_env()` (from `job_search_agent.claude_client`)
+rather than relying on whatever the ambient environment happens to be authenticated as.
+
+Similarly, `CONTACT_EMAIL` in `.env` is required before any HTTP fetch to an external site/API —
+built into a User-Agent string via `job_search_agent.user_agent.build_user_agent()` — so that
+someone else running this project sends their own contact details, not the original author's.
+
+Any agent using a tool that needs approval (e.g. `WebSearch`) must set
+`permission_mode="bypassPermissions"` on `ClaudeAgentOptions` — without it, tool calls hang
+waiting for interactive approval that never comes in an unattended script. See
+`src/job_search_agent/sources/web_search.py` for the pattern.
 
 ## Architecture
 

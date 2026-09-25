@@ -92,15 +92,23 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 
 ## Phase 3 — General web search source agent (jobs)
 
-- [ ] Add a search-based source agent using Claude's web search tool — the same pattern as the
+> Uses Claude's `WebSearch` tool with `permission_mode: "bypassPermissions"` (needed for
+> unattended use — without it, tool calls hang waiting for interactive approval) and
+> `output_format` (JSON schema) to get structured `Listing`-shaped results directly, rather than
+> parsing free text. Costs real money per call unlike the RSS sources — one role search (a few
+> WebSearch calls plus reasoning, on Haiku) ran about $0.03–0.09 in testing. No spend guard yet;
+> that's Phase 12.
+
+- [x] Add a search-based source agent using Claude's web search tool — the same pattern as the
       course's Day 1 search agent, applied to job hunting instead of research
-- [ ] Build natural-language search queries from `criteria.yaml` (roles, locations, keywords)
+- [x] Build natural-language search queries from `criteria.yaml` (roles, locations, keywords)
       rather than hardcoding query strings, so tuning it doesn't mean editing code
-- [ ] Prompt the agent to extract structured `Listing` fields from whatever it finds (title,
+- [x] Prompt the agent to extract structured `Listing` fields from whatever it finds (title,
       company, url, location, description, source) — same shape as Phase 2's output
-- [ ] Run a handful of queries and compare what it surfaces against the RSS feed — the point is
-      catching things the curated feeds/APIs would've missed
-- [ ] Note: this can't reach LinkedIn directly (no scraping/login) — that stays covered by your
+- [x] Run a handful of queries and compare what it surfaces against the RSS feed — the point is
+      catching things the curated feeds/APIs would've missed (confirmed: direct company/ATS
+      postings — Lever, Greenhouse — quite different in character from the academic RSS feeds)
+- [x] Note: this can't reach LinkedIn directly (no scraping/login) — that stays covered by your
       own LinkedIn job alerts, outside this system
 
 ## Phase 4 — Storage & deduplication
