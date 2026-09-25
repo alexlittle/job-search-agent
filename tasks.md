@@ -133,10 +133,28 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 
 ## Phase 5 — Rule-based pre-filter
 
-- [ ] Implement cheap, non-LLM filters using `criteria.yaml` (location, dealbreaker keywords,
+> Free-text matching turned out trickier than expected, worth remembering if this gets touched
+> again (`src/job_search_agent/filters.py` has the full reasoning in comments):
+> - **Location**: word-overlap matching against `criteria.locations`, with two lessons from real
+>   data — short words (like "uk") need *exact* matching, not substring, or "uk" matches inside
+>   "ukraine"; and a plain word-level synonym for "uk" like "united" also matches "United Arab
+>   Emirates", so synonyms ("united kingdom", "artificial intelligence", etc.) are checked as
+>   whole phrases instead.
+> - **Role type**: checked against the listing *title* only, not the full description — RSS/API
+>   descriptions are long, marketing-heavy text that incidentally mentions buzzwords ("AI",
+>   "data", "product") regardless of the actual role, which made a full-text check pass almost
+>   everything. Generic job-title words (engineer, developer, manager, ...) are also excluded
+>   from matching, since they don't discriminate between "AI/ML Engineer" and "Mechanical
+>   Engineer".
+> - Verified end to end against 151 real fetched listings: 138 filtered, 13 kept, and spot
+>   checks confirmed both directions — genuinely irrelevant roles (Account Manager, Shopify
+>   Developer, Mechanical Engineer) correctly dropped, genuinely relevant ones (AI/research
+>   roles in the UK) correctly kept.
+
+- [x] Implement cheap, non-LLM filters using `criteria.yaml` (location, dealbreaker keywords,
       obviously-wrong role type)
-- [ ] Mark filtered-out listings in the DB with a reason, so nothing is silently dropped
-- [ ] Confirm on real data that obviously irrelevant postings get filtered before any LLM call
+- [x] Mark filtered-out listings in the DB with a reason, so nothing is silently dropped
+- [x] Confirm on real data that obviously irrelevant postings get filtered before any LLM call
       would happen
 
 ## Phase 6 — Fit agent v1 (coarse pass, Haiku)

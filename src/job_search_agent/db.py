@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS listings (
     posted_date TEXT,
     description TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'new',
+    status_reason TEXT NOT NULL DEFAULT '',
     first_seen TEXT NOT NULL
 );
 
