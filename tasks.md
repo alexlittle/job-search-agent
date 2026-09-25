@@ -374,11 +374,40 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 
 ## Phase 10 — Learning from feedback
 
-- [ ] Pull accumulated feedback into the fit-agent prompt as examples ("here are jobs I said
+- [x] Pull accumulated feedback into the fit-agent prompt as examples ("here are jobs I said
       yes/no to before, and why, if known")
-- [ ] Re-run the fit agent on a fresh batch and check whether verdicts noticeably reflect past
+- [x] Re-run the fit agent on a fresh batch and check whether verdicts noticeably reflect past
       feedback
-- [ ] Decide how much feedback history to include (recency/cap) to keep prompt size sane
+- [x] Decide how much feedback history to include (recency/cap) to keep prompt size sane
+
+> `db.get_feedback_examples()` pulls the most recent listings the user gave relevant/not_relevant
+> feedback on (ordered by the feedback *event* itself, not a later note-only edit, so touching up
+> a note doesn't bump a listing back to "most recent"), capped at `FEEDBACK_EXAMPLES_LIMIT = 20` in
+> `profile.py` — a flat cap rather than a time window, since usage is still light and a count is
+> simpler to reason about; revisit if feedback volume grows enough that 20 stops being "the recent
+> stuff." `profile.feedback_examples_context()` renders them as a `## Feedback from past listings`
+> block (verdict + title/company + the user's own note when given), inserted into both
+> `fit/haiku.build_prompt()` and `fit/sonnet.build_prompt()` right after the CV/criteria block, and
+> fetched once per run (not once per listing) since it doesn't change mid-run. Returns `""` when
+> there's no feedback yet, so early runs are unaffected.
+>
+> Verified live on a fresh batch (27 new listings fetched via `ingest.py`, 16 survived the
+> pre-filter): Haiku's one 'no' verdict explicitly cited it — *"Research Fellow role requiring PhD
+> (which Alex explicitly rejected before)"* — matching several real not-relevant marks on
+> PhD-gated research-fellow roles. Sonnet showed the same effect on a different listing: *"a
+> dedicated AI/ML engineering title rather than a research-fellow/PhD-gated role (which past
+> feedback shows the candidate correctly rules out)."* Both stages are demonstrably weighing past
+> feedback, not just the static CV/criteria block, without it dominating the scoring (both listings
+> were still judged on their own merits alongside the feedback-derived pattern).
+>
+> Also hit, unrelated to the feedback-context change itself: one Sonnet call failed with "Reached
+> maximum number of turns (1)" mid-run — re-running the same listing standalone immediately after
+> succeeded, so this looks like transient API/SDK flakiness rather than a real bug. Worth noting:
+> `run_sonnet_pass()`/`run_haiku_pass()` only commit once, at the very end of the `with db.connect()`
+> block, so a crash partway through a run (like this one) loses every already-scored listing's
+> result in that run, not just the one that failed - nothing was corrupted, just re-run needed. Not
+> fixed now (out of scope for this phase and hasn't caused a real problem yet, since a re-run is
+> cheap and safe), but worth an incremental-commit fix if larger batches make a partial loss costly.
 
 ## Phase 11 — Coordinator agent
 

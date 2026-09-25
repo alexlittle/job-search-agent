@@ -15,7 +15,7 @@ from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
 from job_search_agent import db
 from job_search_agent.claude_client import anthropic_env
-from job_search_agent.profile import Profile, load_profile
+from job_search_agent.profile import Profile, feedback_examples_context, load_profile
 
 MODEL = "claude-haiku-4-5-20251001"
 STAGE = "haiku"
@@ -41,9 +41,11 @@ class FitResult:
     num_turns: int
 
 
-def build_prompt(listing: sqlite3.Row, profile: Profile) -> str:
+def build_prompt(listing: sqlite3.Row, profile: Profile, feedback_context: str = "") -> str:
+    feedback_block = f"{feedback_context}\n\n" if feedback_context else ""
     return (
         f"{profile.as_prompt_context()}\n\n"
+        f"{feedback_block}"
         "## Listing to judge\n"
         f"Title: {listing['title']}\n"
         f"Company: {listing['company']}\n"
@@ -60,7 +62,9 @@ def build_prompt(listing: sqlite3.Row, profile: Profile) -> str:
     )
 
 
-async def score_listing(listing: sqlite3.Row, profile: Profile) -> FitResult:
+async def score_listing(
+    listing: sqlite3.Row, profile: Profile, feedback_context: str = ""
+) -> FitResult:
     options = ClaudeAgentOptions(
         model=MODEL,
         max_turns=1,
@@ -70,7 +74,8 @@ async def score_listing(listing: sqlite3.Row, profile: Profile) -> FitResult:
     )
 
     verdict, reason, cost_usd, num_turns = "no", "No response", 0.0, 0
-    async for message in query(prompt=build_prompt(listing, profile), options=options):
+    prompt = build_prompt(listing, profile, feedback_context)
+    async for message in query(prompt=prompt, options=options):
         if isinstance(message, ResultMessage):
             num_turns = message.num_turns
             cost_usd = message.total_cost_usd or 0.0
@@ -86,9 +91,10 @@ async def run_haiku_pass() -> None:
     counts = {"yes": 0, "maybe": 0, "no": 0}
 
     with db.connect() as conn:
+        feedback_context = feedback_examples_context(conn)
         rows = conn.execute("SELECT * FROM listings WHERE status = 'pending_fit'").fetchall()
         for row in rows:
-            result = await score_listing(row, profile)
+            result = await score_listing(row, profile, feedback_context)
             conn.execute(
                 "UPDATE listings SET status = ? WHERE id = ?",
                 (f"haiku_{result.verdict}", row["id"]),

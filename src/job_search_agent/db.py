@@ -239,6 +239,29 @@ def set_hidden(conn: sqlite3.Connection, listing_id: int, hidden: bool) -> None:
     )
 
 
+def get_feedback_examples(conn: sqlite3.Connection, limit: int = 20) -> list[sqlite3.Row]:
+    """Most recent listings the user gave relevant/not_relevant feedback on, for feeding into the
+    fit-agent prompts as examples (Phase 10). Ordered by the feedback event itself, not a
+    note-only edit afterwards, so touching up a note doesn't bump a listing back to the "most
+    recent" end of a capped list."""
+    return conn.execute(
+        """
+        SELECT listings.id, listings.title, listings.company, listings.feedback,
+               listings.feedback_note, MAX(events.timestamp) AS feedback_at
+        FROM listings
+        JOIN events
+            ON events.listing_id = listings.id
+            AND events.stage = 'feedback'
+            AND events.message LIKE 'User marked as %'
+        WHERE listings.feedback IS NOT NULL
+        GROUP BY listings.id
+        ORDER BY feedback_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
 def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
     row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else None

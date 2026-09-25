@@ -139,3 +139,14 @@ A few design decisions that shape how new code should fit in:
   coordinator; expect it to be superseded once that phase exists.
 - Dedupe key is normalized (title, company) — not URL, since the same posting on two different
   boards has two different URLs.
+- **Feedback closes the loop back into the fit agents (Phase 10)**: `profile.feedback_examples_context()`
+  pulls the most recent relevant/not_relevant listings (`db.get_feedback_examples()`, capped at
+  `FEEDBACK_EXAMPLES_LIMIT = 20`, ordered by the feedback event itself so a later note-only edit
+  doesn't reshuffle recency) and renders them as a prompt block inserted into both
+  `fit/haiku.build_prompt()` and `fit/sonnet.build_prompt()`, right after the CV/criteria block.
+  Fetched once per run, not once per listing, since it's the same for every listing in a run.
+  Verified live: both stages now cite specific past feedback in their reasoning (e.g. ruling out
+  a PhD-gated research-fellow role because the user had already rejected that pattern). Both
+  `run_haiku_pass()`/`run_sonnet_pass()` commit only once, at the end of the run — a crash partway
+  through loses that whole run's results (nothing corrupted, just re-run), a known gap not yet
+  worth fixing given how cheap and safe a re-run is at current volumes.

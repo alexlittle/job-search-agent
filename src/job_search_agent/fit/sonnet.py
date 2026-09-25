@@ -15,7 +15,7 @@ from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
 from job_search_agent import db
 from job_search_agent.claude_client import anthropic_env
-from job_search_agent.profile import Profile, load_profile
+from job_search_agent.profile import Profile, feedback_examples_context, load_profile
 
 MODEL = "claude-sonnet-5"
 STAGE = "sonnet"
@@ -52,9 +52,11 @@ class Assessment:
         return "weak"
 
 
-def build_prompt(listing: sqlite3.Row, profile: Profile) -> str:
+def build_prompt(listing: sqlite3.Row, profile: Profile, feedback_context: str = "") -> str:
+    feedback_block = f"{feedback_context}\n\n" if feedback_context else ""
     return (
         f"{profile.as_prompt_context()}\n\n"
+        f"{feedback_block}"
         "## Listing to evaluate\n"
         f"Title: {listing['title']}\n"
         f"Company: {listing['company']}\n"
@@ -74,7 +76,9 @@ def build_prompt(listing: sqlite3.Row, profile: Profile) -> str:
     )
 
 
-async def assess_listing(listing: sqlite3.Row, profile: Profile) -> Assessment:
+async def assess_listing(
+    listing: sqlite3.Row, profile: Profile, feedback_context: str = ""
+) -> Assessment:
     options = ClaudeAgentOptions(
         model=MODEL,
         max_turns=1,
@@ -84,7 +88,8 @@ async def assess_listing(listing: sqlite3.Row, profile: Profile) -> Assessment:
     )
 
     assessment = Assessment()
-    async for message in query(prompt=build_prompt(listing, profile), options=options):
+    prompt = build_prompt(listing, profile, feedback_context)
+    async for message in query(prompt=prompt, options=options):
         if isinstance(message, ResultMessage):
             assessment.num_turns = message.num_turns
             assessment.cost_usd = message.total_cost_usd or 0.0
@@ -103,6 +108,7 @@ async def run_sonnet_pass() -> None:
     scored = 0
 
     with db.connect() as conn:
+        feedback_context = feedback_examples_context(conn)
         rows = conn.execute(
             """
             SELECT listings.*, verdicts.verdict AS haiku_verdict, verdicts.reason AS haiku_reason
@@ -116,7 +122,7 @@ async def run_sonnet_pass() -> None:
         ).fetchone()[0]
 
         for row in rows:
-            assessment = await assess_listing(row, profile)
+            assessment = await assess_listing(row, profile, feedback_context)
             bucket = assessment.bucket()
             conn.execute(
                 "UPDATE listings SET status = ? WHERE id = ?",
