@@ -162,33 +162,117 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 > Built here as ordinary synchronous calls, one per listing, so it's easy to see what's
 > happening. Phase 12 switches this and Phase 7 over to the Anthropic Message Batches API (50%
 > cheaper, and nothing here needs an instant answer) once the synchronous version works.
+>
+> Verdicts go in a new `verdicts` table (listing_id, stage, verdict, reason), not a column on
+> `listings` — keeps history if a listing is ever rescored, and each verdict also mirrors into
+> the `events` activity log automatically (`db.log_verdict`). `listings.status` is updated to
+> `haiku_yes`/`haiku_maybe`/`haiku_no` so Phase 7 can query for it directly.
+>
+> Tested against the 13 real listings that survived Phase 5: 1 yes, 8 maybe, 4 no, for $0.2423
+> total (~$0.019/listing) — and the reasoning genuinely engaged with the CV/criteria context
+> (referenced the thesis topic, years of experience, location preference specifically), not just
+> generic keyword matching.
 
-- [ ] Build the first real fit agent: given one listing + your profile, ask Haiku for a coarse
+- [x] Build the first real fit agent: given one listing + your profile, ask Haiku for a coarse
       yes/no/maybe fit judgement with a one-line reason
-- [ ] Define the structured output contract (e.g. JSON: `{verdict, reason}`)
-- [ ] Run it over everything that survived Phase 5, store verdicts in the DB
-- [ ] Print the cost/turn count for the run
+- [x] Define the structured output contract (e.g. JSON: `{verdict, reason}`)
+- [x] Run it over everything that survived Phase 5, store verdicts in the DB
+- [x] Print the cost/turn count for the run
 
 ## Phase 7 — Fit agent v2 (detailed pass, Sonnet)
 
-- [ ] Take everything Haiku marked yes/maybe and send only those to Sonnet
-- [ ] Ask for a detailed structured verdict: fit score, matched criteria, concerns, short
+> Sonnet's prompt also includes Haiku's coarse verdict/reason (via a JOIN on `verdicts`), so it
+> can focus on the specific uncertainty already flagged rather than starting cold. Verdicts go
+> in the same `verdicts` table as Haiku's (stage='sonnet'), `verdict` holds the numeric score,
+> full structured payload (matched_criteria/concerns/rationale) goes in `detail_json`.
+> `listings.status` becomes `sonnet_strong`/`sonnet_possible`/`sonnet_weak` (70/40 thresholds).
+>
+> Tested on the 9 real listings Haiku marked yes/maybe: $0.3752 total (~$0.042/listing, notably
+> pricier than Haiku's ~$0.019). All scored 25-42 ("weak" to borderline "possible") - an honest
+> result, not a bug: this batch is mostly UK academic Research Fellow/postdoc roles that
+> generally require a PhD, which Sonnet correctly flagged as a likely hard mismatch that Haiku's
+> one-line pass hadn't caught. Also caught a US-tax-residency exclusion and a veterinary vs.
+> human healthcare mismatch buried in listing text. Cost comparison: scoring all 13 pre-filtered
+> listings with Sonnet directly would have cost an estimated $0.542 - tiering saved ~$0.17 (31%)
+> in this small batch, and that ratio improves a lot at real scale where Haiku screens out a much
+> larger share as clear "no"s.
+
+- [x] Take everything Haiku marked yes/maybe and send only those to Sonnet
+- [x] Ask for a detailed structured verdict: fit score, matched criteria, concerns, short
       rationale
-- [ ] Store detailed verdicts in the DB alongside the coarse ones
-- [ ] Compare cost of running Sonnet on everything vs. only on Haiku's survivors
+- [x] Store detailed verdicts in the DB alongside the coarse ones
+- [x] Compare cost of running Sonnet on everything vs. only on Haiku's survivors
 
-## Phase 8 — Results dashboard
+## Phase 8 — Results dashboard & onboarding
 
-- [ ] Add Flask, set up a minimal local web app that reads directly from the SQLite store (no
+> Expanded after Phase 7 to also cover first-run setup, since the original plan (personal
+> config files someone edits by hand) is a real barrier for anyone else picking this project up.
+> Build order: the dashboard core first (there's already real scored data sitting in the DB from
+> Phases 2-7 to view), then the onboarding wizard on top as the "nothing configured yet" entry
+> point that leads into that same dashboard. Onboarding's schedule step only *captures* a
+> preference (e.g. "run every 24h") — it doesn't set up a real scheduler; that's still Phase 17,
+> a deliberate scope decision so this phase stays focused on the dashboard/onboarding UI itself.
+> CV upload → `cv.md` is the trickiest part: it needs a real document-handling call (extract
+> text from an uploaded PDF/DOCX, have Claude reformat it into markdown), not just a text prompt.
+
+**Dashboard core:**
+
+> `src/job_search_agent/webapp/` — Flask app factory (`__init__.py`), results view
+> (`results.py` + `templates/results.html`, grouped by `sonnet_strong`/`possible`/`weak`, reading
+> the `verdicts.detail_json` for score/matched_criteria/concerns), and criteria editing
+> (`criteria.py` + `templates/criteria.html`, one-item-per-line textareas). Criteria now live in
+> the DB (`db.get_criteria`/`save_criteria`), seeded once from `profile/criteria.yaml` via
+> `profile.load_criteria()` — editing the YAML file after that point has no effect. Verified with
+> a real server: results page correctly showed the 1 possible + 8 weak matches from Phase 7, and
+> the criteria page round-tripped a save correctly (checked with curl, not just code review).
+> Run with `uv run python -m job_search_agent.webapp`.
+
+- [x] Add Flask, set up a minimal local web app that reads directly from the SQLite store (no
       separate report file)
-- [ ] Build a results page: matched listings grouped by score/verdict, with enough info to decide
+- [x] Build a results page: matched listings grouped by score/verdict, with enough info to decide
       without opening the link (title, company, location, score, why, link)
-- [ ] Move criteria (roles, locations, salary, must-haves, dealbreakers, keywords) into a DB
+- [x] Move criteria (roles, locations, salary, must-haves, dealbreakers, keywords) into a DB
       table, seeded once from `profile/criteria.yaml`, and add a simple editing page on the
       dashboard — this is what makes "dynamically updatable criteria" (raised after Phase 4)
       actually more convenient than editing the YAML file, so it's built here rather than earlier
-- [ ] Run the full pipeline end to end for the first time: fetch (RSS + search) → filter → score
+- [x] Run the full pipeline end to end for the first time: fetch (RSS + search) → filter → score
       → view results in the dashboard
+
+**Onboarding wizard (for a fresh clone with nothing configured yet):**
+
+> `src/job_search_agent/webapp/onboarding.py` — a `before_request` hook on the whole app redirects
+> to whichever step is first incomplete (checked fresh each request: env vars via `.env`, CV file
+> existence, criteria in the DB), except requests already inside the onboarding blueprint itself.
+> Deliberately **not a hard gate on the schedule step** — env/CV/criteria block the dashboard if
+> missing, but a missing/skipped schedule preference doesn't, since nothing else depends on it
+> (confirmed this mattered: an early version gated on it too, which would have bounced the
+> already-configured real setup back into onboarding on every page load).
+>
+> CV upload (step 2) does real document handling: `src/job_search_agent/cv_import.py` extracts
+> text locally (`pypdf`/`python-docx`, free) then has Sonnet reformat it into Markdown (one paid
+> call, logged to `cost_log` under `onboarding:cv_import`) — doesn't work on scanned/image-only
+> PDFs (no OCR), and says so rather than producing garbage. Step 3 reuses the same
+> `_criteria_fields.html` partial and `criteria_dict_from_form()` as the standalone Criteria page,
+> so the two forms can't drift out of sync. `.env` writes go through
+> `job_search_agent.env_utils.set_env_var()`, which updates the *running* process's environment
+> as well as the file, so a key set mid-session takes effect immediately without a restart.
+>
+> Tested live end to end against a real running server (not just code review): confirmed an
+> already-configured user is never gated; confirmed the redirect fires correctly when `cv.md` is
+> (temporarily) missing; posted real values to all four steps, including a real file upload that
+> went through actual text extraction + a real Sonnet call and produced a correct `cv.md`. All
+> tests that touched real files (`.env`, `profile/cv.md`) backed them up first and restored the
+> originals afterward.
+
+- [x] Detect first-run (no `.env` / no criteria in the DB) and redirect to the onboarding flow
+      instead of the dashboard
+- [x] Step 1 — collect `ANTHROPIC_API_KEY` and `CONTACT_EMAIL`, write to `.env`
+- [x] Step 2 — accept a CV upload (PDF/DOCX/text), use Claude to extract and reformat it into
+      `profile/cv.md`
+- [x] Step 3 — collect criteria (roles, locations, salary, must-haves, dealbreakers, keywords)
+      via a form, save into the criteria DB table from the dashboard-core tasks above
+- [x] Step 4 — capture a run-frequency preference (store only — Phase 17 is what would act on it)
+- [x] On completion, redirect into the normal results dashboard
 
 ## Phase 9 — User feedback capture
 

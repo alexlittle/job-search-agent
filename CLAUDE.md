@@ -75,13 +75,27 @@ A few design decisions that shape how new code should fit in:
   calls, then switched to the Anthropic Message Batches API in Phase 12 — that's a deliberate
   two-step sequence (get it working, then make it cheaper), not an oversight if you find
   synchronous calls still in place.
-- All personal data (CV, criteria, source list) is meant to live in config/data files, not
-  hardcoded, so the project stays reusable by someone other than the original user (this is an
-  explicit goal, not just good practice, per `docs/brief.md`). Plain RSS sources are meant to be
-  addable via a config file alone (no code); only bespoke API sources need actual code, via a
-  documented `fetch_listings() -> list[Listing]` plugin interface.
-- Results are viewed and feedback is given through a local Flask dashboard reading straight from
-  the SQLite store (Phase 8/9) — there is no separate Markdown report output.
+- All personal data (CV, source list) is meant to live in config/data files, not hardcoded, so
+  the project stays reusable by someone other than the original user (this is an explicit goal,
+  not just good practice, per `docs/brief.md`). Plain RSS sources are meant to be addable via a
+  config file alone (no code); only bespoke API sources need actual code, via a documented
+  `fetch_listings() -> list[Listing]` plugin interface. **Criteria are the exception** — as of
+  Phase 8 they live in the DB (`db.get_criteria`/`save_criteria`), seeded once from
+  `profile/criteria.yaml` via `profile.load_criteria()`. Editing the YAML file after that point
+  has no effect; the dashboard's Criteria page is how you change it now.
+- Results are viewed, criteria are edited, and feedback is given through a local Flask dashboard
+  (`src/job_search_agent/webapp/`) reading straight from the SQLite store (Phase 8/9) — there is
+  no separate Markdown report output. Run with `uv run python -m job_search_agent.webapp`.
+  Flask's debug-mode auto-reloader picks up code changes; when starting/stopping it in a script
+  or tool call, use a mechanism that survives the call boundary (this project's dev sessions
+  found that plain `&`/`nohup`/`disown` inside a single shell invocation does not).
+- A first-run onboarding wizard (`src/job_search_agent/webapp/onboarding.py`) gates the dashboard
+  via a `before_request` hook on missing `.env` values, a missing CV file, or missing criteria —
+  checked fresh on every request, not cached. It is **not** a gate on everything the wizard
+  collects: the schedule-frequency step is captured but doesn't block dashboard access if unset,
+  since nothing else depends on it yet (Phase 17 will). If adding a new onboarding step, decide
+  deliberately whether it should be a hard gate — making everything one blocks re-entry to the
+  dashboard for already-configured users the moment any single optional field is unset.
 - The SQLite store (`data/job_search.db`, gitignored, see `src/job_search_agent/db.py`) holds
   more than listings: an `events` table is a running activity log (what each pipeline stage did
   and, once Phase 6/7 exist, why a listing was scored the way it was), and a `cost_log` table

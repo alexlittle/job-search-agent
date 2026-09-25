@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Criteria - Job Search Agent{% endblock %}
+{% block content %}
+<h1>Job Search Criteria</h1>
+<p class="stats">
+  One item per line for the list fields below. Changes take effect on the next run - they don't
+  retroactively rescore anything already in the results.
+</p>
+{% if saved %}<p style="color:#2a8a4a; font-weight:600;">Saved.</p>{% endif %}
+
+<form method="post">
+  {% include "_criteria_fields.html" %}
+  <button type="submit">Save</button>
+</form>
+{% endblock %}

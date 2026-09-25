@@ -91,3 +91,13 @@ once the synchronous version works.
 reading from the SQLite store, rather than a plain Markdown report file. The dashboard also
 doubles as the feedback-capture UI — relevant/not-relevant buttons per listing — rather than a
 CLI prompt.
+
+## Follow-up decisions (2026-09-25, after Phase 7)
+
+**Onboarding wizard.** Added to Phase 8 alongside the dashboard, specifically for the
+"customisable and reusable" goal from the top of this brief — a fresh clone currently requires
+hand-editing `.env` and YAML files, which is a real barrier for anyone else. On first run (no
+`.env`/no criteria configured), the dashboard redirects into a setup flow: API key + contact
+email → `.env`, a CV upload that Claude reformats into `profile/cv.md`, a criteria form, and a
+run-frequency preference — the last of which is only *stored*, not acted on; actually running on
+a schedule is still Phase 17.

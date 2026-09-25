@@ -1,0 +1,25 @@
+{% extends "onboarding/_base.html" %}
+{% block step_number %}4{% endblock %}
+{% block content %}
+<h1>How often should this run?</h1>
+<p>
+  This just saves your preference for now - automated scheduled runs aren't built yet, so
+  nothing will run on its own until that's in place. You can change this later.
+</p>
+<form method="post">
+  <label style="font-weight: normal;">
+    <input type="radio" name="run_frequency" value="daily" checked> Daily
+  </label>
+  <label style="font-weight: normal;">
+    <input type="radio" name="run_frequency" value="every_6h"> Every 6 hours
+  </label>
+  <label style="font-weight: normal;">
+    <input type="radio" name="run_frequency" value="weekly"> Weekly
+  </label>
+  <label style="font-weight: normal;">
+    <input type="radio" name="run_frequency" value="manual"> Manual only (I'll run it myself)
+  </label>
+  <br>
+  <button type="submit">Finish setup</button>
+</form>
+{% endblock %}

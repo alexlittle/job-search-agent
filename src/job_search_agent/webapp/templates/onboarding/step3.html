@@ -1,0 +1,10 @@
+{% extends "onboarding/_base.html" %}
+{% block step_number %}3{% endblock %}
+{% block content %}
+<h1>Your search criteria</h1>
+<p>One item per line for the list fields. You can always change these later from the dashboard.</p>
+<form method="post">
+  {% include "_criteria_fields.html" %}
+  <button type="submit">Continue</button>
+</form>
+{% endblock %}

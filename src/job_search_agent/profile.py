@@ -1,7 +1,9 @@
 """Loads the user's CV + job-search criteria into a single context block for the agents.
 
-Real profile data lives in profile/cv.md and profile/criteria.yaml (gitignored). See
-profile/cv.example.md and profile/criteria.example.yaml for the format.
+The CV lives in profile/cv.md (gitignored) - see profile/cv.example.md for the format.
+Criteria live in the database (Phase 8 on), seeded once from profile/criteria.example.yaml's
+sibling profile/criteria.yaml the first time it's needed; after that, the DB is the source of
+truth and the dashboard's criteria page (not the YAML file) is how you change it.
 
 Run with: uv run python -m job_search_agent.profile
 """
@@ -12,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+from job_search_agent import db
 
 DEFAULT_PROFILE_DIR = Path(__file__).resolve().parents[2] / "profile"
 
@@ -43,6 +47,17 @@ class Criteria:
             keywords_avoid=keywords.get("avoid") or [],
             notes=(data.get("notes") or "").strip(),
         )
+
+    def to_dict(self) -> dict:
+        return {
+            "roles": self.roles,
+            "locations": self.locations,
+            "salary": {"currency": self.salary_currency, "minimum": self.salary_minimum},
+            "must_haves": self.must_haves,
+            "dealbreakers": self.dealbreakers,
+            "keywords": {"boost": self.keywords_boost, "avoid": self.keywords_avoid},
+            "notes": self.notes,
+        }
 
 
 @dataclass
@@ -76,24 +91,36 @@ class Profile:
         return "\n".join(lines)
 
 
+def load_criteria(profile_dir: Path | str | None = None) -> Criteria:
+    """Reads criteria from the DB, seeding it once from criteria.yaml if the DB is empty."""
+    directory = Path(profile_dir or os.environ.get("PROFILE_DIR") or DEFAULT_PROFILE_DIR)
+    criteria_path = directory / "criteria.yaml"
+
+    with db.connect() as conn:
+        data = db.get_criteria(conn)
+        if data is None:
+            if not criteria_path.exists():
+                raise FileNotFoundError(
+                    f"No criteria in the database yet, and {criteria_path} doesn't exist "
+                    "either. Copy profile/criteria.example.yaml to profile/criteria.yaml and "
+                    "fill it in, or set criteria via the dashboard's Criteria page."
+                )
+            data = yaml.safe_load(criteria_path.read_text(encoding="utf-8")) or {}
+            db.save_criteria(conn, data)
+        return Criteria.from_dict(data)
+
+
 def load_profile(profile_dir: Path | str | None = None) -> Profile:
     directory = Path(profile_dir or os.environ.get("PROFILE_DIR") or DEFAULT_PROFILE_DIR)
     cv_path = directory / "cv.md"
-    criteria_path = directory / "criteria.yaml"
 
     if not cv_path.exists():
         raise FileNotFoundError(
             f"{cv_path} not found. Copy profile/cv.example.md to profile/cv.md and fill it in."
         )
-    if not criteria_path.exists():
-        raise FileNotFoundError(
-            f"{criteria_path} not found. Copy profile/criteria.example.yaml to "
-            "profile/criteria.yaml and fill it in."
-        )
 
     cv_text = cv_path.read_text(encoding="utf-8")
-    criteria_data = yaml.safe_load(criteria_path.read_text(encoding="utf-8")) or {}
-    return Profile(cv_text=cv_text, criteria=Criteria.from_dict(criteria_data))
+    return Profile(cv_text=cv_text, criteria=load_criteria(profile_dir))
 
 
 def main() -> None:

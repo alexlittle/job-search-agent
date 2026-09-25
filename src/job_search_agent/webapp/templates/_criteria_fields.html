@@ -1,0 +1,46 @@
+{# Shared form fields, included by criteria.html and onboarding/step3.html - same shape as
+   webapp.criteria.criteria_dict_from_form(), so keep the two in sync if either changes. #}
+<p>
+  <label>Target roles<br>
+    <textarea name="roles" rows="4" cols="60">{{ c.roles | join('\n') }}</textarea>
+  </label>
+</p>
+<p>
+  <label>Acceptable locations<br>
+    <textarea name="locations" rows="4" cols="60">{{ c.locations | join('\n') }}</textarea>
+  </label>
+</p>
+<p>
+  <label>Minimum salary currency
+    <input type="text" name="salary_currency" value="{{ c.salary_currency or '' }}" size="6">
+  </label>
+  &nbsp;
+  <label>Minimum salary amount
+    <input type="number" name="salary_minimum" value="{{ c.salary_minimum or '' }}" step="1">
+  </label>
+</p>
+<p>
+  <label>Must-haves<br>
+    <textarea name="must_haves" rows="3" cols="60">{{ c.must_haves | join('\n') }}</textarea>
+  </label>
+</p>
+<p>
+  <label>Dealbreakers<br>
+    <textarea name="dealbreakers" rows="3" cols="60">{{ c.dealbreakers | join('\n') }}</textarea>
+  </label>
+</p>
+<p>
+  <label>Boost keywords<br>
+    <textarea name="keywords_boost" rows="3" cols="60">{{ c.keywords_boost | join('\n') }}</textarea>
+  </label>
+</p>
+<p>
+  <label>Avoid keywords<br>
+    <textarea name="keywords_avoid" rows="3" cols="60">{{ c.keywords_avoid | join('\n') }}</textarea>
+  </label>
+</p>
+<p>
+  <label>Notes<br>
+    <textarea name="notes" rows="4" cols="60">{{ c.notes }}</textarea>
+  </label>
+</p>

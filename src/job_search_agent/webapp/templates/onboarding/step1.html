@@ -1,0 +1,23 @@
+{% extends "onboarding/_base.html" %}
+{% block step_number %}1{% endblock %}
+{% block content %}
+<h1>Welcome</h1>
+<p>Let's get this set up. First, your Anthropic API key and contact email.</p>
+<form method="post">
+  <label>Anthropic API key
+    <input type="password" name="api_key" required autofocus>
+    <span class="hint">
+      From <a href="https://platform.claude.com/" target="_blank" rel="noopener">platform.claude.com</a>
+      (Console, not your claude.ai login). Saved to .env, never sent anywhere else.
+    </span>
+  </label>
+  <label>Contact email
+    <input type="email" name="contact_email" required>
+    <span class="hint">
+      Sent as contact info when fetching external job sites/APIs - use your own, not the
+      original author's.
+    </span>
+  </label>
+  <button type="submit">Continue</button>
+</form>
+{% endblock %}

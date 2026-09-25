@@ -11,6 +11,7 @@ revisit later if it causes real problems.
 """
 
 import hashlib
+import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -53,6 +54,30 @@ CREATE TABLE IF NOT EXISTS cost_log (
     num_turns INTEGER NOT NULL,
     cost_usd REAL NOT NULL,
     detail TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS verdicts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    stage TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    detail_json TEXT,
+    created_at TEXT NOT NULL
+);
+
+-- Single-row table (Phase 8): criteria live here so the dashboard can edit them without
+-- touching profile/criteria.yaml, which is now only used to seed this table once.
+CREATE TABLE IF NOT EXISTS criteria (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    data_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- General-purpose key/value settings (Phase 8 onboarding: the schedule-frequency preference).
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 """
 
@@ -127,4 +152,52 @@ def log_cost(
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (datetime.now(UTC).isoformat(), stage, model, num_turns, cost_usd, detail),
+    )
+
+
+def log_verdict(
+    conn: sqlite3.Connection,
+    listing_id: int,
+    stage: str,
+    verdict: str,
+    reason: str,
+    detail_json: str | None = None,
+) -> None:
+    """Records a fit-agent verdict, and mirrors it into the activity log - this is the "why was
+    this listing recommended or not" history a plain status column can't hold on its own."""
+    conn.execute(
+        """
+        INSERT INTO verdicts (listing_id, stage, verdict, reason, detail_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (listing_id, stage, verdict, reason, detail_json, datetime.now(UTC).isoformat()),
+    )
+    log_event(conn, stage=f"fit:{stage}", message=f"{verdict}: {reason}", listing_id=listing_id)
+
+
+def get_criteria(conn: sqlite3.Connection) -> dict | None:
+    row = conn.execute("SELECT data_json FROM criteria WHERE id = 1").fetchone()
+    return json.loads(row["data_json"]) if row else None
+
+
+def save_criteria(conn: sqlite3.Connection, data: dict) -> None:
+    conn.execute(
+        """
+        INSERT INTO criteria (id, data_json, updated_at) VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET data_json = excluded.data_json, updated_at = excluded.updated_at
+        """,
+        (json.dumps(data), datetime.now(UTC).isoformat()),
+    )
+
+
+def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
     )

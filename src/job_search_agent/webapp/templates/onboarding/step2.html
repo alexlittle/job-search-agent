@@ -1,0 +1,17 @@
+{% extends "onboarding/_base.html" %}
+{% block step_number %}2{% endblock %}
+{% block content %}
+<h1>Your CV</h1>
+<p>
+  Upload your CV (PDF, DOCX, or plain text). It'll be reformatted into Markdown automatically -
+  doesn't need to look tidy going in.
+</p>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" enctype="multipart/form-data">
+  <label>CV file
+    <input type="file" name="cv_file" accept=".pdf,.docx,.txt,.md" required>
+    <span class="hint">Scanned/image-only PDFs won't work - there's no OCR here.</span>
+  </label>
+  <button type="submit">Continue</button>
+</form>
+{% endblock %}

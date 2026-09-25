@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Job Search Agent{% endblock %}</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: -apple-system, system-ui, sans-serif;
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      line-height: 1.5;
+    }
+    nav { margin-bottom: 1.5rem; display: flex; gap: 1.25rem; }
+    nav a { text-decoration: none; color: inherit; font-weight: 600; }
+    h1 { margin-bottom: 0.25rem; }
+    .stats { color: #777; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    .group { margin-bottom: 2rem; }
+    .group h2 { border-bottom: 2px solid currentColor; padding-bottom: 0.25rem; }
+    .listing {
+      border: 1px solid #8884;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }
+    .listing h3 { margin: 0 0 0.25rem 0; }
+    .listing .meta { color: #777; font-size: 0.9rem; margin-bottom: 0.5rem; }
+    .score { font-weight: 700; font-size: 1.05rem; margin-bottom: 0.4rem; }
+    ul.plain { margin: 0.25rem 0; padding-left: 1.2rem; }
+    .matched li { color: #2a8a4a; }
+    .concern li { color: #b5651d; }
+    .empty { color: #888; font-style: italic; }
+  </style>
+</head>
+<body>
+  <nav>
+    <a href="/">Results</a>
+    <a href="/criteria">Criteria</a>
+  </nav>
+  {% block content %}{% endblock %}
+</body>
+</html>
