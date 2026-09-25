@@ -276,9 +276,101 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 
 ## Phase 9 — User feedback capture
 
-- [ ] Add relevant/not-relevant buttons on the dashboard for each listing, writing feedback
+> Added a `feedback` column to `listings` (TEXT, `relevant`/`not_relevant`/NULL) via a real
+> migration (`db._add_column_if_missing`) rather than dropping the dev DB like earlier phases —
+> it now holds real scored data worth real API spend, not disposable test fetches. Each change
+> also writes to the `events` activity log (`db.set_feedback`), so the full history of what you
+> marked and when survives even though the `listings` column itself only holds current state.
+> Buttons show which state is currently selected (disabled + relabeled) and let you switch your
+> mind by clicking the other one. Tested live end to end: POSTed feedback, confirmed it persisted
+> in the DB and rendered correctly (disabled/relabeled button) on a fresh page load, switched it,
+> confirmed both changes were logged as separate events.
+
+- [x] Add relevant/not-relevant buttons on the dashboard for each listing, writing feedback
       straight to the SQLite store
-- [ ] Confirm feedback persists across runs and page reloads
+- [x] Confirm feedback persists across runs and page reloads
+
+> **Follow-up fixes from real usage (2026-09-25):** trying this against actual live listings
+> surfaced three gaps, fixed the same day:
+> - **Free-text notes.** Added a `feedback_note` column and a text input alongside the buttons
+>   (same `<form>`, submitted together via named submit buttons) - `db.set_feedback()` now takes
+>   an optional note, included in the activity-log message too.
+> - **Marking "not relevant" jumped to the top of the page.** Rather than fixing scroll position,
+>   the real fix was structural: the site now has three separate views instead of one. `/` shows
+>   only strong/possible matches minus anything rejected; `/excluded` shows what the *pipeline*
+>   ruled out (filtered/Haiku-no/weak Sonnet score), grouped by stage; `/rejected` shows
+>   everything *you've* marked not relevant, regardless of what the system thought. A listing
+>   disappearing from the current list on feedback (rather than staying in place) makes the
+>   scroll-jump problem moot instead of needing to solve it directly.
+> - All three pages share one query helper (`webapp/results._fetch`) and one card partial
+>   (`templates/_listing_card.html`), so feedback buttons/notes work identically everywhere and
+>   can't drift out of sync between pages.
+> - Verified live, including a real accidental discovery: while testing, real usage had already
+>   marked 5 of the original 8 weak-Sonnet listings not relevant, leaving 3 - confirming the
+>   whole flow (button click → DB write → page relocation) was already working under real load,
+>   not just the scripted test.
+>
+> **Two more real bugs, found by the user clicking real listings right after the above shipped:**
+> - **Stats didn't sum to the total** (151 total, but 150 excluded + 5 rejected = 155). Cause: the
+>   "excluded" count and the `/excluded` page used different WHERE clauses - the stat counted
+>   every system-excluded listing regardless of feedback, while the page (correctly) excluded
+>   ones you'd also marked not relevant, so the overlap got double-counted. Fixed by making every
+>   listing fall into exactly one of four buckets (rejected / main / excluded / pending, feedback
+>   checked before status) via shared `MAIN_WHERE`/`EXCLUDED_WHERE`/`REJECTED_WHERE`/
+>   `PENDING_WHERE` constants in `webapp/results.py`, used by both the pages and the stats query -
+>   they literally cannot drift apart now, by construction.
+> - **Marking an excluded listing "relevant" didn't move it anywhere.** The main page's query
+>   only ever looked at `status IN ('sonnet_strong', 'sonnet_possible')` - a listing whose status
+>   was still `filtered`/`haiku_no`/`sonnet_weak` (feedback doesn't change status) never matched,
+>   so it just silently disappeared from view. Fixed: the main page now also shows anything with
+>   `feedback = 'relevant'` regardless of status, under a new "Your picks (marked relevant)"
+>   section (`_group()`'s `fallback_label` parameter) so an override is visible rather than
+>   vanishing.
+> - Both confirmed against real listings the user had actually clicked, not synthetic test data.
+>
+> **Third round — scalability and clarity, from continued real use:**
+> - **Was it clear when a note was actually saved?** No — the note field shared a form with the
+>   relevant/not-relevant buttons, so typing one did nothing until a button was clicked, and once
+>   a listing was marked, its matching button became disabled, making the note un-editable
+>   afterwards without switching feedback back and forth. Fixed: a distinct "Save note" button
+>   (`db.set_note()`, updates the note without touching feedback) plus a "Saved" confirmation that
+>   appears next to the specific listing just acted on, via a `?saved=<id>` redirect parameter
+>   built from a `next` hidden field on every form (not `request.referrer`, which isn't reliable).
+> - **Long lists won't scale as cards.** `/excluded`, `/rejected`, and the new `/hidden` now
+>   render as compact `<details>`-based rows (title/company/location/tag/score in the closed
+>   `<summary>`, full rationale/matched/concerns/reason in the expanded body) - no JS needed,
+>   native HTML disclosure. Paginated at 25/page via `_fetch()`'s `page` parameter, driven by
+>   plain `?page=N` links. The main results page stays full-card and unpaginated, deliberately -
+>   it's meant to stay small (only strong/possible + your own overrides).
+> - **A "remove from the dashboard entirely" status**, independent of relevant/not-relevant
+>   opinion: a new `hidden_at` column (`db.set_hidden()`), with `HIDDEN_WHERE` taking priority
+>   over every other bucket in the partition. Listings stay in the DB (so dedupe still works) but
+>   don't appear anywhere else. A `/hidden` page with an "Unhide" toggle exists as a safety net -
+>   not explicitly requested, but added since a genuinely irreversible destructive action from a
+>   single click would be a worse default.
+> - All three fixes tested live end to end (note-only save leaves feedback untouched; hide moves
+>   a listing to `/hidden` and back; pagination shows distinct, correctly-tagged content per page;
+>   the 5-way stats partition - shown/excluded/rejected/hidden/pending - still sums to the total).
+>
+> **Fourth round — reducing clicks, from continued real use:**
+> - **Hide took three clicks** (expand row → find Hide inside the detail panel → confirm
+>   dialog) for something meant to be quick and is trivially reversible via the Hidden page. Fixed:
+>   Hide/Unhide moved out of the detail panel into a new shared `_hide_button.html`, included
+>   directly in the row header (table pages) and the card header (main page) — always visible,
+>   no expand needed. The `confirm()` dialog was removed entirely; reversibility (Unhide) does the
+>   job a confirmation would have.
+> - **Expand/collapse wasn't discoverable** — it used a native `<details>/<summary>` element where
+>   the *entire* row toggled on click except the title link, which wasn't obvious (nothing else
+>   in a row looks clickable, and clicking near-but-not-on the title did something unexpected).
+>   Replaced with a plain row + an explicit "Show details"/"Hide details" button
+>   (`toggleDetails()`, a small vanilla-JS function in `base.html` - the only real JS in the
+>   project, everything else is plain forms) - clicking anywhere else in the row now does nothing.
+>   The row a save/hide action just touched auto-expands on redirect (via the same `saved_id`
+>   already used for the "Saved" indicator) so the confirmation is visible immediately rather than
+>   landing inside a collapsed panel.
+> - Verified live: single-click hide with no dialog, confirmed row auto-expands with "Saved" and
+>   "Hide details" shown after a same-page note save, confirmed the Hide button appears correctly
+>   on both the table rows and the main page's cards.
 
 ## Phase 10 — Learning from feedback
 

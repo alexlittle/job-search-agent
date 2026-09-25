@@ -1,0 +1,6 @@
+{# Expects: l. A single always-visible action, independent of expand/collapse state - no
+   confirmation dialog, since it's trivially reversible from the Hidden page. #}
+<form method="post" action="{{ url_for('results.unhide_listing' if l.hidden_at else 'results.hide_listing', listing_id=l.id) }}" class="hide-form">
+  <input type="hidden" name="next" value="{{ request.full_path }}">
+  <button type="submit" class="hide-btn" onclick="event.stopPropagation()">{{ 'Unhide' if l.hidden_at else 'Hide' }}</button>
+</form>

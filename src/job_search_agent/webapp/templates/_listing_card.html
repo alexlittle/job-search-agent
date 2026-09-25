@@ -1,0 +1,11 @@
+{# Expects: l, saved_id #}
+<div class="listing">
+  <div class="listing-header">
+    <div>
+      <h3><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a></h3>
+      <div class="meta">{{ l.company }} &middot; {{ l.location }} &middot; source: {{ l.source }}</div>
+    </div>
+    {% include "_hide_button.html" %}
+  </div>
+  {% include "_listing_detail.html" %}
+</div>

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} - Job Search Agent{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+<p class="stats">{{ intro }}</p>
+
+{% include "_pagination.html" %}
+
+{% if not listings %}
+  <p class="empty">None.</p>
+{% endif %}
+<div class="row-list">
+  {% for l in listings %}
+  <div class="row">
+    <div class="row-header">
+      <a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a>
+      <span class="col-company">{{ l.company }}</span>
+      <span class="col-location">{{ l.location }}</span>
+      {% if status_labels %}<span class="col-tag">{{ status_labels.get(l.status, l.status) }}</span>{% endif %}
+      {% if l.score is defined %}<span class="col-score">{{ l.score }}</span>{% endif %}
+      {% include "_hide_button.html" %}
+      <button type="button" class="toggle-btn" onclick="toggleDetails(this)">
+        {{ 'Hide details' if saved_id == l.id else 'Show details' }}
+      </button>
+    </div>
+    <div class="row-detail" {% if saved_id != l.id %}hidden{% endif %}>
+      {% include "_listing_detail.html" %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% include "_pagination.html" %}
+{% endblock %}

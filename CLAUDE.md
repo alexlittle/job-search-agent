@@ -89,6 +89,40 @@ A few design decisions that shape how new code should fit in:
   Flask's debug-mode auto-reloader picks up code changes; when starting/stopping it in a script
   or tool call, use a mechanism that survives the call boundary (this project's dev sessions
   found that plain `&`/`nohup`/`disown` inside a single shell invocation does not).
+- The dashboard partitions every listing into exactly one of five buckets, checked in this order
+  (see the module docstring and `HIDDEN_WHERE`/`MAIN_WHERE`/`EXCLUDED_WHERE`/`REJECTED_WHERE`/
+  `PENDING_WHERE` in `webapp/results.py`): hidden (`hidden_at` set — takes priority over
+  everything) → rejected (`feedback = 'not_relevant'`) → main (`feedback = 'relevant'`, or unset
+  with a strong/possible Sonnet status) → excluded (unset feedback, pipeline-excluded status) →
+  pending (not scored yet). **These WHERE-clause constants are the single source of truth** —
+  both the pages and the homepage stats are built from them, specifically because an earlier
+  version let the stats and the page queries drift apart (double-counting listings that were
+  both system-excluded and user-rejected) until real usage surfaced it. Changing what counts as
+  "excluded" etc. means changing the constant, not one query site.
+  - `/` — full cards (`templates/_listing_card.html`), unpaginated, deliberately: meant to stay
+    small (only strong/possible + your own overrides, shown under a "Your picks" fallback
+    section when a relevant-marked listing's status isn't strong/possible).
+  - `/excluded`, `/rejected`, `/hidden` — share one template (`templates/listing_table.html`):
+    compact rows, paginated 25/page via `_fetch()`'s `page` argument. Expand/collapse is a plain
+    row + an explicit "Show details"/"Hide details" button (`toggleDetails()`, the one piece of
+    real JS in the project, defined once in `base.html`) — **not** a native `<details>` element;
+    an earlier version used one and real usage found "click anywhere on the row toggles it,
+    except the title" not discoverable, so it was replaced with an explicit control.
+  - All four views share `templates/_listing_detail.html` (rationale/matched/concerns/reason +
+    the feedback form: note, relevant/not-relevant, save-note) and `templates/_hide_button.html`
+    (Hide/Unhide, always visible in the row/card header, not buried in the expanded detail — an
+    earlier version put it in the detail panel with a JS confirm dialog, which took three clicks
+    for an action that's trivially reversible; now one click, no dialog). Extend these partials,
+    not each page, so controls can't drift out of sync between views.
+  - Feedback and hidden-state are independent: a listing can be `feedback='not_relevant'` *and*
+    hidden at the same time, or hidden with no opinion recorded at all. Hiding is about dashboard
+    visibility; feedback is about relevance. Don't conflate the two into one column.
+  - Every mutating route (`give_feedback`, `hide_listing`, `unhide_listing`) takes a `next` value
+    from a hidden form field (not `request.referrer`, which isn't reliable) and redirects back to
+    it with `?saved=<id>` appended (via `_redirect_with_saved`). `_listing_detail.html` shows an
+    inline "Saved" confirmation for that listing, and on `listing_table.html` the matching row
+    auto-expands (`{% if saved_id != l.id %}hidden{% endif %}`) so the confirmation is visible
+    immediately rather than landing inside a collapsed panel.
 - A first-run onboarding wizard (`src/job_search_agent/webapp/onboarding.py`) gates the dashboard
   via a `before_request` hook on missing `.env` values, a missing CV file, or missing criteria —
   checked fresh on every request, not cached. It is **not** a gate on everything the wizard

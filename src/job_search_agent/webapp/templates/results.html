@@ -3,9 +3,10 @@
 {% block content %}
 <h1>Job Search Results</h1>
 <p class="stats">
-  {{ stats.total }} listing(s) fetched total &middot;
-  {{ stats.filtered }} filtered out (pre-filter) &middot;
-  {{ stats.haiku_no }} ruled out by the first pass &middot;
+  {{ stats.total }} listing(s) fetched total: {{ stats.shown }} shown here &middot;
+  <a href="{{ url_for('results.excluded') }}">{{ stats.excluded }} excluded by the pipeline</a> &middot;
+  <a href="{{ url_for('results.rejected') }}">{{ stats.rejected }} you've marked not relevant</a> &middot;
+  <a href="{{ url_for('results.hidden') }}">{{ stats.hidden }} hidden</a> &middot;
   {{ stats.pending }} not yet scored
 </p>
 
@@ -16,22 +17,7 @@
     <p class="empty">None yet.</p>
   {% endif %}
   {% for l in listings %}
-  <div class="listing">
-    <h3><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a></h3>
-    <div class="meta">{{ l.company }} &middot; {{ l.location }} &middot; source: {{ l.source }}</div>
-    {% if l.score is defined %}<div class="score">Score: {{ l.score }}/100</div>{% endif %}
-    {% if l.rationale %}<p>{{ l.rationale }}</p>{% endif %}
-    {% if l.matched_criteria %}
-      <ul class="plain matched">
-        {% for m in l.matched_criteria %}<li>{{ m }}</li>{% endfor %}
-      </ul>
-    {% endif %}
-    {% if l.concerns %}
-      <ul class="plain concern">
-        {% for c in l.concerns %}<li>{{ c }}</li>{% endfor %}
-      </ul>
-    {% endif %}
-  </div>
+    {% include "_listing_card.html" %}
   {% endfor %}
 </div>
 {% endfor %}

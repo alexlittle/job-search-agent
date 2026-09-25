@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS listings (
     description TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'new',
     status_reason TEXT NOT NULL DEFAULT '',
+    feedback TEXT,
+    feedback_note TEXT,
+    hidden_at TEXT,
     first_seen TEXT NOT NULL
 );
 
@@ -87,6 +90,16 @@ def dedupe_key(title: str, company: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    """Lightweight migration: `CREATE TABLE IF NOT EXISTS` doesn't add columns to a table that
+    already exists, and earlier phases just dropped the whole dev DB on a schema change - fine
+    when it only held disposable test fetches, not once real scored data (worth real API spend)
+    is sitting in it, as of Phase 9."""
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -94,6 +107,9 @@ def connect() -> Iterator[sqlite3.Connection]:
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(SCHEMA)
+        _add_column_if_missing(conn, "listings", "feedback", "feedback TEXT")
+        _add_column_if_missing(conn, "listings", "feedback_note", "feedback_note TEXT")
+        _add_column_if_missing(conn, "listings", "hidden_at", "hidden_at TEXT")
         yield conn
         conn.commit()
     finally:
@@ -187,6 +203,39 @@ def save_criteria(conn: sqlite3.Connection, data: dict) -> None:
         ON CONFLICT(id) DO UPDATE SET data_json = excluded.data_json, updated_at = excluded.updated_at
         """,
         (json.dumps(data), datetime.now(UTC).isoformat()),
+    )
+
+
+def set_feedback(
+    conn: sqlite3.Connection, listing_id: int, feedback: str, note: str | None = None
+) -> None:
+    conn.execute(
+        "UPDATE listings SET feedback = ?, feedback_note = ? WHERE id = ?",
+        (feedback, note, listing_id),
+    )
+    message = f"User marked as {feedback}" + (f" — {note}" if note else "")
+    log_event(conn, stage="feedback", message=message, listing_id=listing_id)
+
+
+def set_note(conn: sqlite3.Connection, listing_id: int, note: str | None) -> None:
+    """Updates just the note, leaving any existing relevant/not_relevant feedback untouched -
+    for saving a note before deciding, or editing one afterwards without having to re-click a
+    now-disabled relevant/not-relevant button."""
+    conn.execute("UPDATE listings SET feedback_note = ? WHERE id = ?", (note, listing_id))
+    log_event(conn, stage="feedback", message=f"Note updated — {note}", listing_id=listing_id)
+
+
+def set_hidden(conn: sqlite3.Connection, listing_id: int, hidden: bool) -> None:
+    """Hides a listing from every dashboard view (it stays in the DB, so dedupe still prevents
+    re-fetching it) or reverses that. Independent of feedback - hiding is about visibility, not
+    an opinion on relevance."""
+    value = datetime.now(UTC).isoformat() if hidden else None
+    conn.execute("UPDATE listings SET hidden_at = ? WHERE id = ?", (value, listing_id))
+    log_event(
+        conn,
+        stage="feedback",
+        message="Hidden from dashboard" if hidden else "Unhidden",
+        listing_id=listing_id,
     )
 
 
