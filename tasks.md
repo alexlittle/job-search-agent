@@ -1,0 +1,200 @@
+# Job Search Agent — Build Plan
+
+Sequenced task list for building this step by step. Check items off (`- [ ]` → `- [x]`) as we
+complete them. Each phase should end with something you can actually run and see working before
+moving to the next one.
+
+Built with the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) (Python),
+following the agent-team pattern from the course referenced in `docs/brief.md`
+(one specialist agent per job, a coordinator wiring them together, a validation/refinement loop).
+Storage is local (SQLite), no external services beyond the job-source APIs/feeds, Claude's web
+search tool, and the Anthropic API.
+
+## Architecture at a glance
+
+```
+                 +--> jobs.ac.uk RSS ------------+
+sources          +--> Adzuna API -----------------+--> normalize+dedupe (SQLite) -> rule-based
+                 +--> general web search (jobs) --+        pre-filter
+                                                              |
+                                                              v
+                                           fit agent (Haiku coarse pass)
+                                                              |
+                                                              v
+                                       fit agent (Sonnet detailed pass on survivors)
+                                                              |
+                                                              v
+                 general web search (companies) --> "why follow" agent --+
+                                                                          v
+                                                        report (jobs + companies to watch)
+                                                                          |
+                                                                          v
+                                            user feedback (relevant / not relevant)
+                                                                          |
+                                                                          v
+                                          feedback store -> feeds back into agent prompts
+```
+
+Everything left of the LLM steps is plain Python and free to run as often as you like. The LLM
+only sees listings that survive the cheap filters, and only the cheaper model sees the full
+volume — the expensive model only sees what's already promising.
+
+The **general web search** paths (for jobs, and separately for companies) exist specifically so
+the system isn't limited to boards/APIs you thought to configure — see Phase 3 and Phase 16.
+
+---
+
+## Phase 0 — Project setup
+
+- [x] Create Python project skeleton (`pyproject.toml` or `requirements.txt`, `src/` layout)
+- [x] Set up virtualenv, install `claude-agent-sdk`
+- [x] Get an Anthropic API key, set spend cap in Console, store key via `.env` (gitignored)
+- [x] Confirm setup with a minimal "hello agent" script that makes one Claude call and prints cost
+
+## Phase 1 — Your profile (CV + preferences)
+
+- [ ] Decide the profile format (e.g. a `profile/` folder: `cv.md` + `criteria.yaml`)
+- [ ] Define `criteria.yaml` fields: target roles, locations, salary band, must-haves,
+      dealbreakers, keywords to boost/avoid
+- [ ] Write a loader that reads CV + criteria into a single structured object/string the agents
+      can use as context
+- [ ] Sanity check: print the loaded profile back out correctly
+
+## Phase 2 — First source agent (jobs.ac.uk RSS)
+
+- [ ] Write a plain-Python fetcher for one jobs.ac.uk RSS feed (no LLM involved yet)
+- [ ] Parse each entry into a common `Listing` shape: title, company, url, location, posted date,
+      raw description, source
+- [ ] Print parsed listings to console to confirm parsing works
+- [ ] Design the `Listing` shape so other source agents (structured or search-based) can produce
+      the same shape later
+
+## Phase 3 — General web search source agent (jobs)
+
+- [ ] Add a search-based source agent using Claude's web search tool — the same pattern as the
+      course's Day 1 search agent, applied to job hunting instead of research
+- [ ] Build natural-language search queries from `criteria.yaml` (roles, locations, keywords)
+      rather than hardcoding query strings, so tuning it doesn't mean editing code
+- [ ] Prompt the agent to extract structured `Listing` fields from whatever it finds (title,
+      company, url, location, description, source) — same shape as Phase 2's output
+- [ ] Run a handful of queries and compare what it surfaces against the RSS feed — the point is
+      catching things the curated feeds/APIs would've missed
+- [ ] Note: this can't reach LinkedIn directly (no scraping/login) — that stays covered by your
+      own LinkedIn job alerts, outside this system
+
+## Phase 4 — Storage & deduplication
+
+- [ ] Set up a local SQLite DB with a `listings` table (hash of title+company+url as dedupe key,
+      status, first_seen, source)
+- [ ] Write insert-if-new logic so re-running any fetcher doesn't re-process old listings
+- [ ] Run the Phase 2 and Phase 3 fetchers into storage twice each, confirm reruns find zero new
+      listings and overlapping postings from different sources correctly dedupe together
+
+## Phase 5 — Rule-based pre-filter
+
+- [ ] Implement cheap, non-LLM filters using `criteria.yaml` (location, dealbreaker keywords,
+      obviously-wrong role type)
+- [ ] Mark filtered-out listings in the DB with a reason, so nothing is silently dropped
+- [ ] Confirm on real data that obviously irrelevant postings get filtered before any LLM call
+      would happen
+
+## Phase 6 — Fit agent v1 (coarse pass, Haiku)
+
+- [ ] Build the first real fit agent: given one listing + your profile, ask Haiku for a coarse
+      yes/no/maybe fit judgement with a one-line reason
+- [ ] Define the structured output contract (e.g. JSON: `{verdict, reason}`)
+- [ ] Run it over everything that survived Phase 5, store verdicts in the DB
+- [ ] Print the cost/turn count for the run
+
+## Phase 7 — Fit agent v2 (detailed pass, Sonnet)
+
+- [ ] Take everything Haiku marked yes/maybe and send only those to Sonnet
+- [ ] Ask for a detailed structured verdict: fit score, matched criteria, concerns, short
+      rationale
+- [ ] Store detailed verdicts in the DB alongside the coarse ones
+- [ ] Compare cost of running Sonnet on everything vs. only on Haiku's survivors
+
+## Phase 8 — Report output
+
+- [ ] Write matched listings (with scores + rationale) out to a Markdown report, grouped by
+      score/verdict
+- [ ] Include enough info per listing to decide without opening the link (title, company,
+      location, score, why, link)
+- [ ] Run the full pipeline end to end for the first time: fetch (RSS + search) → filter → score
+      → report
+
+## Phase 9 — User feedback capture
+
+- [ ] Add a simple way to mark a listing relevant/not relevant (CLI prompt, or a small flag file/
+      command reading listing IDs from the report)
+- [ ] Store feedback in the DB against the listing
+- [ ] Confirm feedback persists across runs
+
+## Phase 10 — Learning from feedback
+
+- [ ] Pull accumulated feedback into the fit-agent prompt as examples ("here are jobs I said
+      yes/no to before, and why, if known")
+- [ ] Re-run the fit agent on a fresh batch and check whether verdicts noticeably reflect past
+      feedback
+- [ ] Decide how much feedback history to include (recency/cap) to keep prompt size sane
+
+## Phase 11 — Coordinator agent
+
+- [ ] Build a coordinator that runs the whole pipeline (sources → filter → Haiku → Sonnet →
+      report) as one orchestrated flow, matching the course's coordinator pattern
+- [ ] Add per-agent turn caps so a bad run can't loop indefinitely
+- [ ] Add basic logging of what the coordinator did at each stage
+
+## Phase 12 — Cost controls & observability
+
+- [ ] Add prompt caching for the profile/criteria block (identical across every fit-agent call in
+      a run)
+- [ ] Track and print total run cost (calls, tokens, $ estimate) at the end of every run
+- [ ] Add a configurable max-listings-per-run / max-spend-per-run guard — this matters more once
+      Phase 3's open-ended search queries are in the mix
+
+## Phase 13 — Second structured source agent (Adzuna API)
+
+- [ ] Implement an Adzuna API fetcher producing the same `Listing` shape from Phase 2
+- [ ] Plug it into the existing pipeline with no changes needed downstream — proves the
+      pluggable-source design actually works
+- [ ] Confirm dedupe correctly merges overlapping postings across all sources (RSS, search,
+      Adzuna)
+
+## Phase 14 — Validation/retry loop for uncertain calls
+
+- [ ] For listings Sonnet marks "uncertain" (e.g. snippet too thin to judge), fetch the full job
+      description page and re-run the fit check with fuller context
+- [ ] Cap retries so this can't spiral in cost
+- [ ] Confirm uncertain cases actually get resolved (or explicitly stay unresolved) rather than
+      silently guessed at
+
+## Phase 15 — Company/startup discovery agent
+
+This is a different kind of output from a job listing: not "here's a role to apply for" but
+"here's a company worth following, that might be worth a speculative application."
+
+- [ ] Define a `CompanyLead` shape distinct from `Listing`: name, sector/stage, why relevant,
+      careers/about page link, notes, source
+- [ ] Add a search-based discovery agent (reusing the Phase 3 pattern) that looks for companies/
+      startups matching your criteria (sector, stage, location, mission) even when no specific job
+      is advertised
+- [ ] Add a "why follow this" judgement step (a lighter version of the fit agent) that explains
+      relevance rather than scoring against a specific job posting
+- [ ] Store company leads in their own table, with the same feedback mechanism as listings
+      (relevant / not relevant / already known)
+- [ ] Add a "Companies to watch" section to the report, separate from job listings
+- [ ] Feed company-lead feedback into the Phase 10 learning loop the same way as listing feedback
+
+## Phase 16 — Make it reusable by others
+
+- [ ] Move all personal specifics (CV, criteria, source list, search query templates) out of code
+      and into config/data files that a new user would edit
+- [ ] Write a short README: setup, how to add a new source agent, how criteria.yaml works
+- [ ] Add a sample/anonymized profile so someone else can try the system without your CV
+
+## Phase 17 — Stretch: scheduling
+
+- [ ] Wire the coordinator to run on a schedule (cron or similar) with the spend guard from
+      Phase 12 protecting unattended runs
+- [ ] Decide what happens to reports/feedback prompts when nobody's watching a scheduled run

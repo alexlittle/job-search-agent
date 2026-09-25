@@ -1,0 +1,19 @@
+[project]
+name = "job-search-agent"
+version = "0.1.0"
+description = "A customisable multi-agent job search assistant: finds and scores job listings and companies worth watching, without applying on your behalf."
+authors = [
+    { name = "Alex Little", email = "alex@alexlittle.net" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "claude-agent-sdk>=0.1.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+job-search-agent = "job_search_agent:main"
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
