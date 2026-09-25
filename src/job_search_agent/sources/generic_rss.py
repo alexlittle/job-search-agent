@@ -17,9 +17,9 @@ import requests
 import yaml
 
 from job_search_agent.listing import Listing
+from job_search_agent.user_agent import build_user_agent
 
 CONFIG_PATH = Path(__file__).resolve().parents[3] / "config" / "sources.yaml"
-USER_AGENT = "job-search-agent/0.1 (personal project; contact alex@alexlittle.net)"
 
 
 def load_feed_configs() -> list[dict]:
@@ -53,7 +53,7 @@ def fetch_feed(feed_config: dict, keywords: str = "") -> list[Listing]:
     response = requests.get(
         feed_config["url"],
         params=params,
-        headers={"User-Agent": USER_AGENT},
+        headers={"User-Agent": build_user_agent()},
         timeout=15,
     )
     response.raise_for_status()
