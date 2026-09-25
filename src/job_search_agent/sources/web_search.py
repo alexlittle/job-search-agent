@@ -14,12 +14,21 @@ Run with: uv run python -m job_search_agent.sources.web_search [role]
 
 import asyncio
 import sys
+from dataclasses import dataclass
 
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
 from job_search_agent.claude_client import anthropic_env
 from job_search_agent.listing import Listing
 from job_search_agent.profile import Criteria, load_profile
+
+
+@dataclass
+class SearchCost:
+    model: str
+    num_turns: int
+    cost_usd: float
+    detail: str
 
 MODEL = "claude-haiku-4-5-20251001"
 SOURCE_NAME = "web_search"
@@ -76,7 +85,7 @@ def build_prompt(role: str, criteria: Criteria) -> str:
     return "\n".join(lines)
 
 
-async def search_for_role(role: str, criteria: Criteria) -> list[Listing]:
+async def search_for_role(role: str, criteria: Criteria) -> tuple[list[Listing], SearchCost]:
     options = ClaudeAgentOptions(
         model=MODEL,
         max_turns=6,
@@ -87,40 +96,48 @@ async def search_for_role(role: str, criteria: Criteria) -> list[Listing]:
     )
 
     listings: list[Listing] = []
+    cost = SearchCost(model=MODEL, num_turns=0, cost_usd=0.0, detail=role)
     async for message in query(prompt=build_prompt(role, criteria), options=options):
-        if isinstance(message, ResultMessage) and message.structured_output:
-            for item in message.structured_output.get("listings", []):
-                listings.append(
-                    Listing(
-                        source=SOURCE_NAME,
-                        title=item.get("title", ""),
-                        company=item.get("company", ""),
-                        url=item.get("url", ""),
-                        location=item.get("location", ""),
-                        posted_date=item.get("posted_date"),
-                        description=item.get("description", ""),
+        if isinstance(message, ResultMessage):
+            cost.num_turns = message.num_turns
+            cost.cost_usd = message.total_cost_usd or 0.0
+            if message.structured_output:
+                for item in message.structured_output.get("listings", []):
+                    listings.append(
+                        Listing(
+                            source=SOURCE_NAME,
+                            title=item.get("title", ""),
+                            company=item.get("company", ""),
+                            url=item.get("url", ""),
+                            location=item.get("location", ""),
+                            posted_date=item.get("posted_date"),
+                            description=item.get("description", ""),
+                        )
                     )
-                )
-    return listings
+    return listings, cost
 
 
-async def search_all(role: str | None = None) -> list[Listing]:
+async def search_all(role: str | None = None) -> tuple[list[Listing], list[SearchCost]]:
     profile = load_profile()
     roles = [role] if role else profile.criteria.roles
 
     listings: list[Listing] = []
+    costs: list[SearchCost] = []
     for one_role in roles:
-        listings.extend(await search_for_role(one_role, profile.criteria))
-    return listings
+        role_listings, role_cost = await search_for_role(one_role, profile.criteria)
+        listings.extend(role_listings)
+        costs.append(role_cost)
+    return listings, costs
 
 
 def main() -> None:
     role = sys.argv[1] if len(sys.argv) > 1 else None
-    listings = asyncio.run(search_all(role))
+    listings, costs = asyncio.run(search_all(role))
     for listing in listings:
         print(f"- [{listing.company}] {listing.title} ({listing.location})")
         print(f"  {listing.url}")
-    print(f"\n{len(listings)} listing(s) found via web search.")
+    total_cost = sum(c.cost_usd for c in costs)
+    print(f"\n{len(listings)} listing(s) found via web search. (${total_cost:.4f} total cost)")
 
 
 if __name__ == "__main__":

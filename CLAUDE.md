@@ -82,3 +82,12 @@ A few design decisions that shape how new code should fit in:
   documented `fetch_listings() -> list[Listing]` plugin interface.
 - Results are viewed and feedback is given through a local Flask dashboard reading straight from
   the SQLite store (Phase 8/9) — there is no separate Markdown report output.
+- The SQLite store (`data/job_search.db`, gitignored, see `src/job_search_agent/db.py`) holds
+  more than listings: an `events` table is a running activity log (what each pipeline stage did
+  and, once Phase 6/7 exist, why a listing was scored the way it was), and a `cost_log` table
+  records every LLM call's cost. Any new LLM-calling or fetching code should write to these
+  rather than only printing to console — the dashboard is meant to surface this history, not
+  just final results. `src/job_search_agent/ingest.py` is a temporary stand-in for the Phase 11
+  coordinator; expect it to be superseded once that phase exists.
+- Dedupe key is normalized (title, company) — not URL, since the same posting on two different
+  boards has two different URLs.

@@ -96,8 +96,9 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 > unattended use — without it, tool calls hang waiting for interactive approval) and
 > `output_format` (JSON schema) to get structured `Listing`-shaped results directly, rather than
 > parsing free text. Costs real money per call unlike the RSS sources — one role search (a few
-> WebSearch calls plus reasoning, on Haiku) ran about $0.03–0.09 in testing. No spend guard yet;
-> that's Phase 12.
+> WebSearch calls plus reasoning, on Haiku) ran $0.03–0.34 across different roles in testing —
+> wide variance depending on how many searches a role needed. No spend guard yet; that's Phase
+> 12, and this variance is exactly why it matters.
 
 - [x] Add a search-based source agent using Claude's web search tool — the same pattern as the
       course's Day 1 search agent, applied to job hunting instead of research
@@ -111,13 +112,24 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 - [x] Note: this can't reach LinkedIn directly (no scraping/login) — that stays covered by your
       own LinkedIn job alerts, outside this system
 
-## Phase 4 — Storage & deduplication
+## Phase 4 — Storage, activity log & cost log
 
-- [ ] Set up a local SQLite DB with a `listings` table (hash of title+company+url as dedupe key,
+> Dedupe key is normalized (title, company), not URL — the same posting on two different boards
+> has two different URLs, so matching on URL would miss exactly the cross-source duplicates this
+> is meant to catch. Also added, beyond the original plan: an `events` table (activity log —
+> "why was this recommended/filtered" will populate once Phase 5/6/7 exist) and a `cost_log`
+> table (already used by `web_search.py`). `src/job_search_agent/ingest.py` is a small stand-in
+> for the Phase 11 coordinator — runs both source agents once and stores everything.
+
+- [x] Set up a local SQLite DB with a `listings` table (hash of title+company+url as dedupe key,
       status, first_seen, source)
-- [ ] Write insert-if-new logic so re-running any fetcher doesn't re-process old listings
-- [ ] Run the Phase 2 and Phase 3 fetchers into storage twice each, confirm reruns find zero new
+- [x] Write insert-if-new logic so re-running any fetcher doesn't re-process old listings
+- [x] Run the Phase 2 and Phase 3 fetchers into storage twice each, confirm reruns find zero new
       listings and overlapping postings from different sources correctly dedupe together
+- [x] Add an `events` table logging pipeline activity (what ran, what it found)
+- [x] Add a `cost_log` table logging LLM call cost per stage, wired into `web_search.py`
+- [ ] Criteria-in-DB (so it's editable without a code/file change) deferred to Phase 8, when the
+      dashboard gives an actual UI to edit it — see docs/brief.md follow-up decisions
 
 ## Phase 5 — Rule-based pre-filter
 
@@ -153,6 +165,10 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
       separate report file)
 - [ ] Build a results page: matched listings grouped by score/verdict, with enough info to decide
       without opening the link (title, company, location, score, why, link)
+- [ ] Move criteria (roles, locations, salary, must-haves, dealbreakers, keywords) into a DB
+      table, seeded once from `profile/criteria.yaml`, and add a simple editing page on the
+      dashboard — this is what makes "dynamically updatable criteria" (raised after Phase 4)
+      actually more convenient than editing the YAML file, so it's built here rather than earlier
 - [ ] Run the full pipeline end to end for the first time: fetch (RSS + search) → filter → score
       → view results in the dashboard
 

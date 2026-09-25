@@ -162,6 +162,9 @@ venv.bak/
 profile/*
 !profile/*.example.*
 
+# Local runtime database (listings, activity log, cost log) - personal data, not committed
+data/
+
 # Spyder project settings
 .spyderproject
 .spyproject
