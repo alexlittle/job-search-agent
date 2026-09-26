@@ -3,6 +3,10 @@ verdict, then gives a scored, itemised assessment. Only runs on what Haiku's coa
 6) didn't rule out - the whole point of model tiering is that the pricier model only ever sees
 the subset worth a careful look.
 
+Runs as one Anthropic Message Batches API call (Phase 12) rather than one query per listing - see
+`fit/haiku.py`'s docstring for why (50% cheaper, plain `anthropic` SDK, shared CV/criteria/
+feedback block cached in `system` rather than repeated per listing).
+
 Run with: uv run python -m job_search_agent.fit.sonnet
 """
 
@@ -11,26 +15,27 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKError, ResultMessage, query
-
-from job_search_agent import db
-from job_search_agent.claude_client import anthropic_env, call_with_retry
+from job_search_agent import db, limits
+from job_search_agent.fit.batch_client import BatchResult, run_batch
 from job_search_agent.profile import Profile, feedback_examples_context, load_profile
+from job_search_agent.pricing import estimate_cost_usd
 
 MODEL = "claude-sonnet-5"
 STAGE = "sonnet"
+MAX_OUTPUT_TOKENS = 1024
 
 ASSESSMENT_SCHEMA = {
     "type": "json_schema",
     "schema": {
         "type": "object",
         "properties": {
-            "score": {"type": "integer", "minimum": 0, "maximum": 100},
+            "score": {"type": "integer"},
             "matched_criteria": {"type": "array", "items": {"type": "string"}},
             "concerns": {"type": "array", "items": {"type": "string"}},
             "rationale": {"type": "string"},
         },
         "required": ["score", "matched_criteria", "concerns", "rationale"],
+        "additionalProperties": False,
     },
 }
 
@@ -42,7 +47,8 @@ class Assessment:
     concerns: list[str] = field(default_factory=list)
     rationale: str = "No response"
     cost_usd: float = 0.0
-    num_turns: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
 
     def bucket(self) -> str:
         if self.score >= 70:
@@ -52,11 +58,13 @@ class Assessment:
         return "weak"
 
 
-def build_prompt(listing: sqlite3.Row, profile: Profile, feedback_context: str = "") -> str:
-    feedback_block = f"{feedback_context}\n\n" if feedback_context else ""
+def build_system_prompt(profile: Profile, feedback_context: str) -> str:
+    feedback_block = f"\n\n{feedback_context}" if feedback_context else ""
+    return f"{profile.as_prompt_context()}{feedback_block}"
+
+
+def build_user_message(listing: sqlite3.Row) -> str:
     return (
-        f"{profile.as_prompt_context()}\n\n"
-        f"{feedback_block}"
         "## Listing to evaluate\n"
         f"Title: {listing['title']}\n"
         f"Company: {listing['company']}\n"
@@ -76,30 +84,42 @@ def build_prompt(listing: sqlite3.Row, profile: Profile, feedback_context: str =
     )
 
 
-async def assess_listing(
-    listing: sqlite3.Row, profile: Profile, feedback_context: str = ""
-) -> Assessment:
-    options = ClaudeAgentOptions(
-        model=MODEL,
-        max_turns=1,
-        tools=[],
-        output_format=ASSESSMENT_SCHEMA,
-        env=anthropic_env(),
-    )
+def _batch_request(listing: sqlite3.Row, system_text: str) -> dict:
+    return {
+        "custom_id": f"listing-{listing['id']}",
+        "params": {
+            "model": MODEL,
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "system": [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
+            "messages": [{"role": "user", "content": build_user_message(listing)}],
+            "output_config": {"format": ASSESSMENT_SCHEMA},
+        },
+    }
 
-    assessment = Assessment()
-    prompt = build_prompt(listing, profile, feedback_context)
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, ResultMessage):
-            assessment.num_turns = message.num_turns
-            assessment.cost_usd = message.total_cost_usd or 0.0
-            if message.structured_output:
-                out = message.structured_output
-                assessment.score = out.get("score", 0)
-                assessment.matched_criteria = out.get("matched_criteria", [])
-                assessment.concerns = out.get("concerns", [])
-                assessment.rationale = out.get("rationale", assessment.rationale)
-    return assessment
+
+def _parse_result(result: BatchResult) -> Assessment:
+    text = next(b.text for b in result.message.content if b.type == "text")
+    out = json.loads(text)
+    usage = result.message.usage
+    cost_usd = estimate_cost_usd(
+        MODEL,
+        usage.input_tokens,
+        usage.output_tokens,
+        cache_creation_input_tokens=usage.cache_creation_input_tokens or 0,
+        cache_read_input_tokens=usage.cache_read_input_tokens or 0,
+    )
+    return Assessment(
+        # The raw Messages API's structured-output schema doesn't support integer min/max (unlike
+        # claude-agent-sdk's output_format, which tolerated it) - the 0-100 range is prompted for
+        # but not schema-enforced, so clamp defensively rather than trust the model never drifts.
+        score=max(0, min(100, out.get("score", 0))),
+        matched_criteria=out.get("matched_criteria", []),
+        concerns=out.get("concerns", []),
+        rationale=out.get("rationale", "No response"),
+        cost_usd=cost_usd,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+    )
 
 
 async def run_sonnet_pass() -> None:
@@ -120,22 +140,30 @@ async def run_sonnet_pass() -> None:
         pending_count = conn.execute(
             "SELECT COUNT(*) FROM listings WHERE status LIKE 'haiku_%'"
         ).fetchone()[0]
+        if not rows:
+            print("No listings pending a Sonnet pass.")
+            return
+        rows = limits.cap_listings(rows, stage=STAGE)
+
+        system_text = build_system_prompt(profile, feedback_context)
+        user_texts = [build_user_message(row) for row in rows]
+        limits.check_spend_cap(MODEL, system_text, user_texts, MAX_OUTPUT_TOKENS)
+
+        requests = [_batch_request(row, system_text) for row in rows]
+        results = await run_batch(requests)
 
         for row in rows:
-            try:
-                assessment = await call_with_retry(
-                    lambda row=row: assess_listing(row, profile, feedback_context)
-                )
-            except ClaudeSDKError as exc:
+            result = results.get(f"listing-{row['id']}")
+            if result is None or not result.succeeded:
+                reason = result.error if result else "missing from batch results"
                 db.log_event(
-                    conn,
-                    stage=STAGE,
-                    message=f"Gave up after retries: {exc}",
-                    listing_id=row["id"],
+                    conn, stage=STAGE, message=f"Batch request failed: {reason}", listing_id=row["id"]
                 )
                 conn.commit()
-                print(f"[error] {row['title'][:55]} - gave up after retries: {exc}")
+                print(f"[error] {row['title'][:55]} - batch request {reason}")
                 continue
+
+            assessment = _parse_result(result)
             bucket = assessment.bucket()
             conn.execute(
                 "UPDATE listings SET status = ? WHERE id = ?",
@@ -160,9 +188,11 @@ async def run_sonnet_pass() -> None:
                 conn,
                 stage=f"fit:{STAGE}",
                 model=MODEL,
-                num_turns=assessment.num_turns,
+                num_turns=1,
                 cost_usd=assessment.cost_usd,
                 detail=row["title"],
+                input_tokens=assessment.input_tokens,
+                output_tokens=assessment.output_tokens,
             )
             conn.commit()
             total_cost += assessment.cost_usd
@@ -173,7 +203,7 @@ async def run_sonnet_pass() -> None:
             for c in assessment.concerns:
                 print(f"    ? {c}")
 
-    print(f"\nScored {scored} listing(s) with Sonnet. (${total_cost:.4f} total cost)")
+    print(f"\nScored {scored} listing(s) with Sonnet. (${total_cost:.4f} total cost, batch)")
     if scored:
         per_item = total_cost / scored
         projected_all = per_item * pending_count

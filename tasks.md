@@ -448,15 +448,62 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 
 ## Phase 12 — Cost controls & observability
 
-- [ ] Switch the Phase 6/7 fit-agent calls to the Anthropic Message Batches API (submit a batch,
+- [x] Switch the Phase 6/7 fit-agent calls to the Anthropic Message Batches API (submit a batch,
       poll for completion, retrieve results) instead of one-by-one synchronous calls — 50%
       cheaper for the same requests, using the plain `anthropic` Python SDK rather than
       `claude-agent-sdk` (which is built for synchronous tool-use loops, not batch submission)
-- [ ] Add prompt caching for the profile/criteria block (identical across every fit-agent call in
+- [x] Add prompt caching for the profile/criteria block (identical across every fit-agent call in
       a run)
-- [ ] Track and print total run cost (calls, tokens, $ estimate) at the end of every run
-- [ ] Add a configurable max-listings-per-run / max-spend-per-run guard — this matters more once
+- [x] Track and print total run cost (calls, tokens, $ estimate) at the end of every run
+- [x] Add a configurable max-listings-per-run / max-spend-per-run guard — this matters more once
       Phase 3's open-ended search queries are in the mix
+
+> `fit/haiku.py` and `fit/sonnet.py` no longer make one `claude-agent-sdk` `query()` call per
+> listing - each run builds one Batches API request per listing (`fit/batch_client.py`, using the
+> plain `anthropic` SDK's `AsyncAnthropic`) and submits them all as a single batch, polling
+> (`POLL_INTERVAL_SECONDS = 10`, capped at `MAX_POLL_SECONDS = 1800`) until every request has a
+> result. A request that errors, cancels, or expires is logged and skipped (left in its prior
+> status so the next run picks it up) rather than failing the whole batch.
+>
+> The CV/criteria/feedback-examples block - identical for every listing in a run - moved out of
+> the per-listing prompt string and into the `system` parameter with a `cache_control: ephemeral`
+> breakpoint, so Anthropic can cache and reuse it instead of reprocessing it per request.
+> `pricing.py` prices raw token counts ourselves (`PRICES` per model, `BATCH_DISCOUNT = 0.5`),
+> since the Batches API - unlike `claude-agent-sdk`'s `ResultMessage.total_cost_usd` - only
+> returns token counts, not a dollar figure; `cost_log` gained `input_tokens`/`output_tokens`
+> columns (migration, not a drop) so the dashboard's History page can show real token counts, not
+> just an estimated cost.
+>
+> `limits.py` adds the volume/spend guard: `MAX_LISTINGS_PER_RUN` (default 50, `.env`-configurable)
+> caps how many listings a single batch takes on, deferring the rest to next run; `check_spend_cap`
+> estimates a batch's worst-case cost (every request hitting its full `max_tokens`, no caching
+> credit - deliberately pessimistic since it's a safety net, not a forecast) before submitting, and
+> raises rather than submits if it exceeds `MAX_SPEND_PER_RUN_USD` (default $2.00). This sits
+> underneath the Anthropic Console spend cap `docs/brief.md` already recommends setting directly
+> on the account - a second, app-level line of defense, not a replacement for it.
+>
+> Two raw-API schema gaps surfaced only by a real batch call, not by code review - `claude-agent-sdk`'s
+> `output_format` had evidently been tolerating both: (1) `output_config.format.schema` requires
+> `additionalProperties: false` explicitly on every object type, or every request in the batch
+> errors; (2) integer properties don't support `minimum`/`maximum` at all - removed from
+> `ASSESSMENT_SCHEMA`'s `score` field, replaced with a defensive `max(0, min(100, ...))` clamp
+> after parsing, since the prompt still asks for 0-100 but the schema can no longer enforce it.
+>
+> Verified live end-to-end on two real listings (temporarily reset from `filtered` to `pending_fit`
+> for the test, restored afterward): Haiku batch scored both correctly (still citing past feedback
+> in its reasoning - the Phase 10 loop survived the rewrite intact), one was bumped to
+> `haiku_maybe` to test the Sonnet batch too, which also scored correctly. Confirmed caching
+> behaviour empirically rather than assuming it: Sonnet's system prompt (~3.3k tokens) triggered a
+> real `cache_creation_input_tokens` write, but Haiku's (~1.9-2.4k tokens) didn't cache at all -
+> Haiku-tier models need a 2048-token minimum to cache at all, Sonnet-tier only needs 1024, and
+> this project's profile/criteria/feedback block happens to sit between those two thresholds. Not
+> a bug, just a real limit worth knowing: caching may or may not engage on Haiku calls depending on
+> how long the user's own CV/criteria/feedback history is.
+>
+> Also, since this phase moved Haiku/Sonnet off `claude-agent-sdk` entirely, `claude_client.call_with_retry`
+> (added in Phase 11 for exactly this class of call) would have had no remaining caller - wired it
+> into `sources/web_search.py`'s `search_for_role` instead, the one other place a single flaky
+> `claude-agent-sdk` call could still take down a whole run.
 
 ## Phase 13 — Second structured source agent (Adzuna API)
 

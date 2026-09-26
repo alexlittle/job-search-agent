@@ -27,7 +27,9 @@
     <span class="col-time">{{ r.timestamp[:19].replace("T", " ") }}</span>
     <span class="col-tag">{{ stage_labels.get(r.stage, r.stage) }}</span>
     <span class="col-detail">{{ r.detail }}</span>
-    <span class="col-turns">{{ r.num_turns }} turn{{ "" if r.num_turns == 1 else "s" }}</span>
+    <span class="col-turns">
+      {% if r.input_tokens is not none %}{{ r.input_tokens }} in / {{ r.output_tokens }} out{% else %}{{ r.num_turns }} turn{{ "" if r.num_turns == 1 else "s" }}{% endif %}
+    </span>
     <span class="col-cost">${{ "%.4f"|format(r.cost_usd) }}</span>
   </div>
   {% endfor %}

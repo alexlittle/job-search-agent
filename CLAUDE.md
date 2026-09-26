@@ -71,10 +71,37 @@ A few design decisions that shape how new code should fit in:
   outside this system).
 - **Cost controls are part of the design, not an afterthought**: turn caps, spend guards, and
   prompt caching for the repeated profile/criteria block are explicit phases in `tasks.md`, not
-  optional hardening. The fit-agent stages (Phase 6/7) are built first as ordinary synchronous
-  calls, then switched to the Anthropic Message Batches API in Phase 12 — that's a deliberate
-  two-step sequence (get it working, then make it cheaper), not an oversight if you find
-  synchronous calls still in place.
+  optional hardening. The fit-agent stages (Phase 6/7) were built first as ordinary synchronous
+  `claude-agent-sdk` calls, then switched to the Anthropic Message Batches API in Phase 12 — that
+  was a deliberate two-step sequence (get it working, then make it cheaper), not an oversight.
+- **`fit/haiku.py` and `fit/sonnet.py` use the plain `anthropic` SDK, not `claude-agent-sdk`**
+  (Phase 12) — `claude-agent-sdk` doesn't expose batch submission, and these two are the only
+  agents in the pipeline where every request is independent and none needs an instant answer, so
+  they're the ones worth batching (50% cheaper). Each run builds one Batches API request per
+  listing (`fit/batch_client.py`), submits them together, and polls
+  (`MAX_POLL_SECONDS = 1800`) until done; a request that errors is logged and skipped rather than
+  retried, since the next run's query naturally picks it back up. `web_search.py` still uses
+  `claude-agent-sdk` (it's a single interactive tool-use loop per call, not a bulk of independent
+  requests) with `claude_client.call_with_retry` for transient-failure protection instead.
+  **The raw API's structured-output schema is stricter than `claude-agent-sdk`'s `output_format`
+  tolerated**: every object type needs `additionalProperties: false` explicitly, and integer
+  properties can't have `minimum`/`maximum` (enforce ranges by clamping after parsing instead, as
+  `sonnet.py`'s `_parse_result` does for `score`). Both only surfaced as a real batch error, not a
+  schema-validation error before submission — if adding a new structured-output call against the
+  raw API, expect a similar rejection until the schema is pared back to what it actually accepts.
+  The shared CV/criteria/feedback-examples block goes in `system` with a `cache_control:
+  ephemeral` breakpoint (not in the per-listing message) so it can be cached instead of resent —
+  but a model's minimum cacheable prompt length differs by tier (2048 tokens for Haiku, 1024 for
+  Sonnet), so whether Haiku's system prompt actually caches depends on how long the user's own
+  CV/criteria/feedback history is; don't assume it always does. `pricing.py` prices the Batches
+  API's raw token counts ourselves (it doesn't return a dollar cost like `claude-agent-sdk`'s
+  `ResultMessage.total_cost_usd` did) — these are Anthropic's list prices as of 2026-09, kept in
+  one table to update if they change, not a source of truth for a real invoice.
+- **`limits.py`** is the app-level spend/volume guard underneath the Anthropic Console spend cap
+  `docs/brief.md` recommends setting directly on the account: `MAX_LISTINGS_PER_RUN` caps how many
+  listings one Haiku/Sonnet batch takes on (the rest wait for next run), and
+  `MAX_SPEND_PER_RUN_USD` is a deliberately pessimistic pre-flight worst-case estimate checked
+  before a batch is submitted. Both are `.env`-configurable, defaulting to 50 listings / $2.00.
 - All personal data (CV, source list) is meant to live in config/data files, not hardcoded, so
   the project stays reusable by someone other than the original user (this is an explicit goal,
   not just good practice, per `docs/brief.md`). Plain RSS sources are meant to be addable via a

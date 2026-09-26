@@ -4,21 +4,27 @@ looks at what this stage doesn't rule out, so a wrong "no" here is costly (the l
 a proper look) while a wrong "yes"/"maybe" just costs a bit of Sonnet budget later. The prompt
 reflects that asymmetry explicitly.
 
+Runs as one Anthropic Message Batches API call (Phase 12) rather than one query per listing - 50%
+cheaper for the same requests, via the plain `anthropic` SDK (see `fit/batch_client.py`) rather
+than `claude-agent-sdk`, which doesn't expose batch submission. The CV/criteria/feedback block is
+identical for every listing in a run, so it goes in `system` with a prompt-caching breakpoint
+rather than being repeated in each listing's own message.
+
 Run with: uv run python -m job_search_agent.fit.haiku
 """
 
 import asyncio
+import json
 import sqlite3
-from dataclasses import dataclass
 
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKError, ResultMessage, query
-
-from job_search_agent import db
-from job_search_agent.claude_client import anthropic_env, call_with_retry
+from job_search_agent import db, limits
+from job_search_agent.fit.batch_client import BatchResult, run_batch
 from job_search_agent.profile import Profile, feedback_examples_context, load_profile
+from job_search_agent.pricing import estimate_cost_usd
 
 MODEL = "claude-haiku-4-5-20251001"
 STAGE = "haiku"
+MAX_OUTPUT_TOKENS = 300
 
 VERDICT_SCHEMA = {
     "type": "json_schema",
@@ -29,23 +35,18 @@ VERDICT_SCHEMA = {
             "reason": {"type": "string"},
         },
         "required": ["verdict", "reason"],
+        "additionalProperties": False,
     },
 }
 
 
-@dataclass
-class FitResult:
-    verdict: str
-    reason: str
-    cost_usd: float
-    num_turns: int
+def build_system_prompt(profile: Profile, feedback_context: str) -> str:
+    feedback_block = f"\n\n{feedback_context}" if feedback_context else ""
+    return f"{profile.as_prompt_context()}{feedback_block}"
 
 
-def build_prompt(listing: sqlite3.Row, profile: Profile, feedback_context: str = "") -> str:
-    feedback_block = f"{feedback_context}\n\n" if feedback_context else ""
+def build_user_message(listing: sqlite3.Row) -> str:
     return (
-        f"{profile.as_prompt_context()}\n\n"
-        f"{feedback_block}"
         "## Listing to judge\n"
         f"Title: {listing['title']}\n"
         f"Company: {listing['company']}\n"
@@ -62,27 +63,33 @@ def build_prompt(listing: sqlite3.Row, profile: Profile, feedback_context: str =
     )
 
 
-async def score_listing(
-    listing: sqlite3.Row, profile: Profile, feedback_context: str = ""
-) -> FitResult:
-    options = ClaudeAgentOptions(
-        model=MODEL,
-        max_turns=1,
-        tools=[],
-        output_format=VERDICT_SCHEMA,
-        env=anthropic_env(),
-    )
+def _batch_request(listing: sqlite3.Row, system_text: str) -> dict:
+    return {
+        "custom_id": f"listing-{listing['id']}",
+        "params": {
+            "model": MODEL,
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "system": [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
+            "messages": [{"role": "user", "content": build_user_message(listing)}],
+            "output_config": {"format": VERDICT_SCHEMA},
+        },
+    }
 
-    verdict, reason, cost_usd, num_turns = "no", "No response", 0.0, 0
-    prompt = build_prompt(listing, profile, feedback_context)
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, ResultMessage):
-            num_turns = message.num_turns
-            cost_usd = message.total_cost_usd or 0.0
-            if message.structured_output:
-                verdict = message.structured_output.get("verdict", verdict)
-                reason = message.structured_output.get("reason", reason)
-    return FitResult(verdict=verdict, reason=reason, cost_usd=cost_usd, num_turns=num_turns)
+
+def _parse_result(result: BatchResult) -> tuple[str, str, float, int, int]:
+    text = next(b.text for b in result.message.content if b.type == "text")
+    parsed = json.loads(text)
+    verdict = parsed.get("verdict", "no")
+    reason = parsed.get("reason", "No response")
+    usage = result.message.usage
+    cost_usd = estimate_cost_usd(
+        MODEL,
+        usage.input_tokens,
+        usage.output_tokens,
+        cache_creation_input_tokens=usage.cache_creation_input_tokens or 0,
+        cache_read_input_tokens=usage.cache_read_input_tokens or 0,
+    )
+    return verdict, reason, cost_usd, usage.input_tokens, usage.output_tokens
 
 
 async def run_haiku_pass() -> None:
@@ -93,49 +100,54 @@ async def run_haiku_pass() -> None:
     with db.connect() as conn:
         feedback_context = feedback_examples_context(conn)
         rows = conn.execute("SELECT * FROM listings WHERE status = 'pending_fit'").fetchall()
+        if not rows:
+            print("No listings pending a Haiku pass.")
+            return
+        rows = limits.cap_listings(rows, stage=STAGE)
+
+        system_text = build_system_prompt(profile, feedback_context)
+        user_texts = [build_user_message(row) for row in rows]
+        limits.check_spend_cap(MODEL, system_text, user_texts, MAX_OUTPUT_TOKENS)
+
+        requests = [_batch_request(row, system_text) for row in rows]
+        results = await run_batch(requests)
+
         for row in rows:
-            try:
-                result = await call_with_retry(
-                    lambda row=row: score_listing(row, profile, feedback_context)
-                )
-            except ClaudeSDKError as exc:
+            result = results.get(f"listing-{row['id']}")
+            if result is None or not result.succeeded:
+                reason = result.error if result else "missing from batch results"
                 db.log_event(
-                    conn,
-                    stage=STAGE,
-                    message=f"Gave up after retries: {exc}",
-                    listing_id=row["id"],
+                    conn, stage=STAGE, message=f"Batch request failed: {reason}", listing_id=row["id"]
                 )
                 conn.commit()
-                print(f"[error] {row['title'][:60]} - gave up after retries: {exc}")
+                print(f"[error] {row['title'][:60]} - batch request {reason}")
                 continue
+
+            verdict, reason, cost_usd, in_tok, out_tok = _parse_result(result)
             conn.execute(
                 "UPDATE listings SET status = ? WHERE id = ?",
-                (f"haiku_{result.verdict}", row["id"]),
+                (f"haiku_{verdict}", row["id"]),
             )
-            db.log_verdict(
-                conn,
-                listing_id=row["id"],
-                stage=STAGE,
-                verdict=result.verdict,
-                reason=result.reason,
-            )
+            db.log_verdict(conn, listing_id=row["id"], stage=STAGE, verdict=verdict, reason=reason)
             db.log_cost(
                 conn,
                 stage=f"fit:{STAGE}",
                 model=MODEL,
-                num_turns=result.num_turns,
-                cost_usd=result.cost_usd,
+                num_turns=1,
+                cost_usd=cost_usd,
                 detail=row["title"],
+                input_tokens=in_tok,
+                output_tokens=out_tok,
             )
             conn.commit()
-            total_cost += result.cost_usd
-            counts[result.verdict] = counts.get(result.verdict, 0) + 1
-            print(f"[{result.verdict:>5}] {row['title'][:60]} - {result.reason}")
+            total_cost += cost_usd
+            counts[verdict] = counts.get(verdict, 0) + 1
+            print(f"[{verdict:>5}] {row['title'][:60]} - {reason}")
 
     print(
         f"\nScored {sum(counts.values())} listing(s): "
         f"{counts['yes']} yes, {counts['maybe']} maybe, {counts['no']} no. "
-        f"(${total_cost:.4f} total cost)"
+        f"(${total_cost:.4f} total cost, batch)"
     )
 
 

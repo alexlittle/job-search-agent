@@ -4,11 +4,14 @@ The Phase 11 coordinator - supersedes calling `ingest.py`, `filters.py`, `fit/ha
 point wiring the specialist agents together).
 
 Per-agent turn/retry caps already exist at the point where each agent actually runs a Claude
-query - `max_turns` on every `ClaudeAgentOptions` (1 for Haiku/Sonnet's single structured-output
-call, 6 for web search's multi-step tool use) bounds a single call, and
-`claude_client.call_with_retry` (used inside `fit/haiku.py` and `fit/sonnet.py`) bounds how many
-times a single listing gets retried after a transient failure before the coordinator gives up on
-it and moves on - so one bad listing or a flaky API response can't stall or crash a whole run.
+call. Haiku/Sonnet (Phase 12) run as one Message Batches API submission each, not a per-listing
+loop - a single failed request within a batch is logged and skipped rather than retried (see
+`fit/haiku.py`/`fit/sonnet.py`), since the next coordinator run picks it back up anyway. Web
+search (still a single synchronous `claude-agent-sdk` call, `max_turns=6`) uses
+`claude_client.call_with_retry` instead, since there's no batch to fall back into if it fails.
+`limits.py` adds the other half of "can't run away": `MAX_LISTINGS_PER_RUN` caps how many
+listings a single Haiku/Sonnet batch takes on, and `MAX_SPEND_PER_RUN_USD` is a pre-flight
+worst-case cost check before either batch is submitted.
 
 Run with: uv run python -m job_search_agent.coordinator [keywords-for-rss] [--no-web-search]
 (omit keywords for the default "python"; web search runs once per role in the criteria and costs

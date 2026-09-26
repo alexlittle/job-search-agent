@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
-from job_search_agent.claude_client import anthropic_env
+from job_search_agent.claude_client import anthropic_env, call_with_retry
 from job_search_agent.listing import Listing
 from job_search_agent.profile import Criteria, load_profile
 
@@ -85,7 +85,7 @@ def build_prompt(role: str, criteria: Criteria) -> str:
     return "\n".join(lines)
 
 
-async def search_for_role(role: str, criteria: Criteria) -> tuple[list[Listing], SearchCost]:
+async def _run_search_query(role: str, criteria: Criteria) -> tuple[list[Listing], SearchCost]:
     options = ClaudeAgentOptions(
         model=MODEL,
         max_turns=6,
@@ -115,6 +115,13 @@ async def search_for_role(role: str, criteria: Criteria) -> tuple[list[Listing],
                         )
                     )
     return listings, cost
+
+
+async def search_for_role(role: str, criteria: Criteria) -> tuple[list[Listing], SearchCost]:
+    # Retries once on a transient claude-agent-sdk failure (e.g. the "reached maximum number of
+    # turns" error seen in real use elsewhere in this project) rather than losing the whole
+    # search - see claude_client.call_with_retry.
+    return await call_with_retry(lambda: _run_search_query(role, criteria))
 
 
 async def search_all(role: str | None = None) -> tuple[list[Listing], list[SearchCost]]:

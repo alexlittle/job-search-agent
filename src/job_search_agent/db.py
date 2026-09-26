@@ -110,6 +110,8 @@ def connect() -> Iterator[sqlite3.Connection]:
         _add_column_if_missing(conn, "listings", "feedback", "feedback TEXT")
         _add_column_if_missing(conn, "listings", "feedback_note", "feedback_note TEXT")
         _add_column_if_missing(conn, "listings", "hidden_at", "hidden_at TEXT")
+        _add_column_if_missing(conn, "cost_log", "input_tokens", "input_tokens INTEGER")
+        _add_column_if_missing(conn, "cost_log", "output_tokens", "output_tokens INTEGER")
         yield conn
         conn.commit()
     finally:
@@ -161,13 +163,25 @@ def log_cost(
     num_turns: int,
     cost_usd: float,
     detail: str = "",
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
 ) -> None:
     conn.execute(
         """
-        INSERT INTO cost_log (timestamp, stage, model, num_turns, cost_usd, detail)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO cost_log
+            (timestamp, stage, model, num_turns, cost_usd, detail, input_tokens, output_tokens)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (datetime.now(UTC).isoformat(), stage, model, num_turns, cost_usd, detail),
+        (
+            datetime.now(UTC).isoformat(),
+            stage,
+            model,
+            num_turns,
+            cost_usd,
+            detail,
+            input_tokens,
+            output_tokens,
+        ),
     )
 
 
