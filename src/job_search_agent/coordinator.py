@@ -16,15 +16,16 @@ listings a single Haiku/Sonnet batch takes on, and `MAX_SPEND_PER_RUN_USD` is a 
 worst-case cost check before either batch is submitted.
 
 Run with: uv run python -m job_search_agent.coordinator [keywords-for-rss] [--no-web-search]
-(omit keywords for the default "python"; web search runs once per role in the criteria and costs
-real money each time, so it's easy to skip for a quick/free RSS-only run)
+(omit keywords to default to the candidate's own first target role from criteria; web search runs
+once per role in the criteria and costs real money each time, so it's easy to skip for a
+quick/free RSS-only run)
 """
 
 import asyncio
 import sys
 from datetime import UTC, datetime
 
-from job_search_agent import db
+from job_search_agent import db, profile
 from job_search_agent.filters import run_filters
 from job_search_agent.fit.haiku import run_haiku_pass
 from job_search_agent.fit.retry import run_retry_pass
@@ -39,7 +40,8 @@ def _log(message: str) -> None:
         db.log_event(conn, stage=STAGE, message=message)
 
 
-async def run_pipeline(keywords: str = "python", include_web_search: bool = True) -> None:
+async def run_pipeline(keywords: str | None = None, include_web_search: bool = True) -> None:
+    keywords = keywords or profile.default_search_keywords()
     started_at = datetime.now(UTC).isoformat()
     _log(f"Pipeline run started (keywords={keywords!r}, web_search={include_web_search})")
 
@@ -80,7 +82,7 @@ def main() -> None:
     args = sys.argv[1:]
     include_web_search = "--no-web-search" not in args
     positional = [a for a in args if a != "--no-web-search"]
-    keywords = positional[0] if positional else "python"
+    keywords = positional[0] if positional else None
     asyncio.run(run_pipeline(keywords=keywords, include_web_search=include_web_search))
 
 

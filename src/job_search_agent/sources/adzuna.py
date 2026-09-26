@@ -29,9 +29,16 @@ from job_search_agent.profile import load_criteria
 from job_search_agent.user_agent import build_user_agent
 
 BASE_URL = "https://api.adzuna.com/v1/api/jobs/{country}/search/{page}"
-DEFAULT_COUNTRY = "gb"
 RESULTS_PER_PAGE = 20
 SOURCE_NAME = "adzuna"
+
+
+def default_country() -> str:
+    """Adzuna's country code (see their docs for the full list, e.g. gb/us/de/fr/au/...).
+    .env-configurable (Phase 16) rather than a hardcoded constant - this was a UK-specific default
+    of the original author's, not something reusable as-is for a user elsewhere."""
+    load_dotenv()
+    return os.environ.get("ADZUNA_COUNTRY", "gb").lower()
 
 
 def have_credentials() -> bool:
@@ -82,10 +89,11 @@ def _to_listing(item: dict) -> Listing:
 
 
 def fetch_listings(
-    what: str, country: str = DEFAULT_COUNTRY, results_per_page: int = RESULTS_PER_PAGE
+    what: str, country: str | None = None, results_per_page: int = RESULTS_PER_PAGE
 ) -> list[Listing]:
     """The plugin interface entry point (see sources/__init__.py) - one page of results for a
     single search term."""
+    country = country or default_country()
     app_id, app_key = require_credentials()
     response = requests.get(
         BASE_URL.format(country=country, page=1),
@@ -103,7 +111,8 @@ def fetch_listings(
     return [_to_listing(item) for item in response.json().get("results", [])]
 
 
-def fetch_all(role: str | None = None, country: str = DEFAULT_COUNTRY) -> list[Listing]:
+def fetch_all(role: str | None = None, country: str | None = None) -> list[Listing]:
+    country = country or default_country()
     roles = [role] if role else load_criteria().roles
     listings: list[Listing] = []
     for one_role in roles:

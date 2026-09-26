@@ -752,10 +752,97 @@ This is a different kind of output from a job listing: not "here's a role to app
 
 ## Phase 16 — Make it reusable by others
 
-- [ ] Move all personal specifics (CV, criteria, source list, search query templates) out of code
+> Audited the codebase for anything personal-specific still baked into code rather than config -
+> most of it was already fine by this point (CV in gitignored `profile/cv.md` with an example
+> template since Phase 8, criteria DB-only and dashboard-editable since Phase 8, sources
+> config-driven since Phase 2), but found and fixed two real leftovers: `ingest.py`/
+> `coordinator.py`/`sources/generic_rss.py` all hardcoded `"python"` as the RSS search-term
+> fallback when no CLI argument was given - a personal default of the original author's, not a
+> neutral one. Replaced with `profile.default_search_keywords()`, which uses the candidate's own
+> first target role from criteria (falling back to a generic "software" only if no criteria are
+> set yet at all). Similarly, `sources/adzuna.py`'s `DEFAULT_COUNTRY = "gb"` was a hardcoded
+> Python constant rather than something a non-UK user could change without editing code - replaced
+> with `default_country()`, reading an optional `ADZUNA_COUNTRY` from `.env` (documented in
+> `.env.example`). Verified both live: `default_search_keywords()` correctly returned the real
+> criteria's first role ("AI/ML Engineer") and a real RSS fetch using it returned real results;
+> `adzuna.default_country()` correctly returned "gb" from the current `.env`.
+>
+> No separate "sample criteria" file was added - Phase 8's onboarding wizard already replaced
+> `profile/criteria.example.yaml` as the fresh-setup path (see the Phase 8 follow-up note from
+> 2026-09-26), and that file was deliberately removed rather than kept around unused. Someone
+> cloning this fresh gets criteria entirely through the dashboard's onboarding form now, with no
+> file to copy first.
+>
+> Wrote `README.md` (previously just the project title) - setup, running the coordinator vs. the
+> separate company-discovery pipeline, how to add a new source (RSS via config, or a bespoke
+> `fetch_listings()` module), where criteria/CV/`.env` configuration lives, and the cost-control
+> knobs, all pointing back to `CLAUDE.md`/`tasks.md` for the full design rationale rather than
+> duplicating it. Kept deliberately short per the phase's own brief, not a rewrite of `CLAUDE.md`.
+
+- [x] Move all personal specifics (CV, criteria, source list, search query templates) out of code
       and into config/data files that a new user would edit
-- [ ] Write a short README: setup, how to add a new source agent, how criteria.yaml works
-- [ ] Add a sample/anonymized profile so someone else can try the system without your CV
+- [x] Write a short README: setup, how to add a new source agent, how criteria.yaml works
+- [x] Add a sample/anonymized profile so someone else can try the system without your CV
+- [x] Package as a Docker image/compose setup (added after the basics above, per user request
+      2026-09-26) - lowers the "install uv/Python 3.12/dependencies correctly" barrier, distinct
+      from what onboarding already solves (configuration, not installation). Needs volume mounts
+      for `.env`, `data/job_search.db`, and `profile/` specifically, since onboarding and normal
+      use write to all three at runtime - a naive image bake would lose everything on restart.
+
+> `Dockerfile` follows the standard `uv` Docker pattern: a deps-only layer (`COPY pyproject.toml
+> uv.lock` + `uv sync --frozen --no-install-project`) cached separately from a second layer that
+> copies the rest of the source and syncs the project itself, so an ordinary code-only rebuild
+> doesn't re-resolve dependencies. `docker-compose.yml` mounts `.env`, `data/`, `profile/`, and
+> `config/` from the host - the same four paths the app reads/writes at runtime (`db.DB_PATH`,
+> `profile.DEFAULT_PROFILE_DIR`, `generic_rss.CONFIG_PATH`, and `env_utils.ENV_PATH` all resolve
+> relative to the installed package location, which lines up with these mount targets regardless
+> of what directory the container's shell happens to be in).
+>
+> Two real things this surfaced, not just plumbing:
+> - **Flask's dev server binds to 127.0.0.1 by default**, which is unreachable from outside a
+>   container even with the port published. `webapp/__main__.py` now reads `HOST`/`FLASK_DEBUG`
+>   from the environment (defaulting to the exact previous behavior - `127.0.0.1`, debug on - so
+>   local `uv run` usage is unchanged), and the Dockerfile sets `HOST=0.0.0.0`/`FLASK_DEBUG=false`.
+>   Debug mode's interactive debugger is a genuine remote-code-execution risk if it were ever
+>   reachable beyond localhost, so turning it off for the packaged image (vs. local dev editing,
+>   where the auto-reloader is worth keeping) was a deliberate, not incidental, choice.
+> - **The dashboard has no authentication of its own** - anyone who can reach the port can see the
+>   candidate's CV, criteria, and full cost history, and submit feedback. `docker-compose.yml`
+>   binds the published port to `127.0.0.1` only by default (documented in a comment, and in the
+>   README) rather than the more commonly-copy-pasted `"5000:5000"`, specifically so a reader who
+>   skims past the explanation doesn't end up exposing it to their whole LAN by default.
+> - Bind-mounting `.env` before it exists creates a directory at that path instead of a file (a
+>   well-known Docker gotcha) and breaks the app confusingly - documented as a required `touch
+>   .env` first step in both the compose file's top comment and the README.
+>
+> **Initial verification here was reasoning-only** (no Docker daemon was available at the time -
+> checked the compose YAML parsed, confirmed the exact `ghcr.io/astral-sh/uv` tag actually exists
+> via the GHCR registry API after an initial guessed version turned out wrong, checked the volume
+> paths against the real path-resolution code). The user then ran it for real on their own machine
+> and it worked - `docker compose up --build` succeeded and the dashboard came up - but the
+> dashboard showed all the real listings/companies from this session's earlier live testing, which
+> looked surprising until confirmed as correct: `docker-compose.yml` mounts `./data` from whatever
+> directory `docker compose` is run in, and that directory was this project's own, already full of
+> real data from every phase's live verification this session. Not a bug - exactly what makes
+> results persist across container rebuilds - just surprising without the explanation.
+>
+> **Confirmed properly afterward with a real, separate instance**: assembled a second copy of the
+> project (git-tracked files at their current, edited working-tree content, plus the three new
+> untracked Docker files - i.e. exactly what a fresh clone after committing this work would have)
+> in a directory with no pre-existing `.env`/`data`/`profile`, and ran it with a distinct compose
+> project name and port so it couldn't collide with the user's already-running container. Hit a
+> real environment quirk along the way worth recording: `docker` here is a **snap package**, which
+> runs sandboxed and cannot see `/tmp` at all - regular shell commands (`ls`, `rsync`) saw the test
+> files fine while `docker compose` reported "no such file" for the exact same path, since snap
+> confinement gives it an entirely different filesystem view (its own private `/tmp`, only the real
+> home directory shared through). Moving the test directory under `/home/alex/` instead of `/tmp`
+> fixed it immediately - worth knowing if this project is ever debugged again on a similar
+> snap-based setup. The separate instance then confirmed everything as intended: `GET /` 302-
+> redirected to `/onboarding/step1` (the before_request gate correctly firing on empty `.env`/CV/
+> criteria), the onboarding page rendered, and both `listings` and `company_leads` were genuinely
+> `0` inside that container's own mounted `data/`. Torn down completely afterward (container,
+> network, image, and the temporary directory - including one root-owned leftover file from
+> running as the container's user, removed via a throwaway `alpine` container rather than `sudo`).
 
 ## Phase 17 — Stretch: scheduling
 

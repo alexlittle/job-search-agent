@@ -1,0 +1,20 @@
+# Before first run: `touch .env` (or `cp .env.example .env`) if you don't have one yet - Docker
+# silently creates a directory instead of a file when bind-mounting a path that doesn't exist,
+# which breaks the app in a confusing way. The onboarding wizard fills .env in from there.
+#
+# Bound to 127.0.0.1 only, deliberately: the dashboard has no login of its own (anyone who can
+# reach it can see your CV, criteria, and cost history, and give feedback), so this keeps it
+# reachable only from the machine running Docker itself. If you want to reach it from another
+# device on your network, change this to "5000:5000" - but understand there's no authentication
+# behind it at all before doing that.
+services:
+  dashboard:
+    build: .
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - ./.env:/app/.env
+      - ./data:/app/data
+      - ./profile:/app/profile
+      - ./config:/app/config
+    restart: unless-stopped

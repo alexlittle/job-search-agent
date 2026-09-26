@@ -173,6 +173,21 @@ def load_criteria(profile_dir: Path | str | None = None) -> Criteria:
         return Criteria.from_dict(data)
 
 
+GENERIC_SEARCH_KEYWORDS = "software"
+
+
+def default_search_keywords() -> str:
+    """A reasonable RSS search term when none is given on the command line (Phase 16: this used
+    to be a hardcoded "python", which was a personal default of the original author's rather than
+    something a new user would want). Uses the candidate's own first target role from criteria if
+    set, falling back to a generic placeholder for a totally fresh setup with no criteria yet."""
+    try:
+        roles = load_criteria().roles
+    except FileNotFoundError:
+        return GENERIC_SEARCH_KEYWORDS
+    return roles[0] if roles else GENERIC_SEARCH_KEYWORDS
+
+
 def load_profile(profile_dir: Path | str | None = None) -> Profile:
     directory = Path(profile_dir or os.environ.get("PROFILE_DIR") or DEFAULT_PROFILE_DIR)
     cv_path = directory / "cv.md"

@@ -1,0 +1,10 @@
+.venv
+.git
+.idea
+data/
+profile/*
+!profile/*.example.*
+.env
+.env.example
+__pycache__
+*.pyc

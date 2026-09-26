@@ -17,6 +17,7 @@ import requests
 import yaml
 
 from job_search_agent.listing import Listing
+from job_search_agent.profile import default_search_keywords
 from job_search_agent.user_agent import build_user_agent
 
 CONFIG_PATH = Path(__file__).resolve().parents[3] / "config" / "sources.yaml"
@@ -87,7 +88,7 @@ def fetch_all(keywords: str = "", feed_name: str | None = None) -> list[Listing]
 
 def main() -> None:
     feed_name = sys.argv[1] if len(sys.argv) > 1 else None
-    keywords = sys.argv[2] if len(sys.argv) > 2 else "python"
+    keywords = sys.argv[2] if len(sys.argv) > 2 else default_search_keywords()
 
     listings = fetch_all(keywords=keywords, feed_name=feed_name)
     for listing in listings:

@@ -11,7 +11,7 @@ import asyncio
 import sqlite3
 import sys
 
-from job_search_agent import db
+from job_search_agent import db, profile
 from job_search_agent.sources import adzuna, generic_rss, web_search
 
 
@@ -71,7 +71,7 @@ async def ingest_web_search(conn: sqlite3.Connection, role: str | None) -> None:
 
 
 def main() -> None:
-    keywords = sys.argv[1] if len(sys.argv) > 1 else "python"
+    keywords = sys.argv[1] if len(sys.argv) > 1 else profile.default_search_keywords()
     with db.connect() as conn:
         ingest_rss(conn, keywords=keywords)
         ingest_adzuna(conn, role=None)
