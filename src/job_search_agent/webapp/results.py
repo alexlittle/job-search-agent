@@ -51,7 +51,10 @@ EXCLUDED_WHERE = (
 REJECTED_WHERE = "hidden_at IS NULL AND feedback = 'not_relevant'"
 PENDING_WHERE = (
     "hidden_at IS NULL AND feedback IS NULL "
-    "AND status IN ('new', 'pending_fit', 'haiku_yes', 'haiku_maybe')"
+    # sonnet_uncertain (Phase 14) is a listing awaiting fit/retry.py's one attempt at a fuller
+    # description before it's finalized into a real bucket - "not fully assessed yet", same as
+    # the other statuses here.
+    "AND status IN ('new', 'pending_fit', 'haiku_yes', 'haiku_maybe', 'sonnet_uncertain')"
 )
 
 
@@ -64,7 +67,15 @@ def _fetch(conn, where_sql: str, page: int | None = None) -> list[dict]:
                sonnet.detail_json AS sonnet_detail_json
         FROM listings
         LEFT JOIN verdicts haiku ON haiku.listing_id = listings.id AND haiku.stage = 'haiku'
-        LEFT JOIN verdicts sonnet ON sonnet.listing_id = listings.id AND sonnet.stage = 'sonnet'
+        -- A listing can have more than one 'sonnet'-stage verdict if fit/retry.py (Phase 14)
+        -- rescored it after fetching the full posting page - the verdicts table keeps both for
+        -- history, so this picks only the newest one rather than joining every row (which would
+        -- otherwise duplicate that listing in every list here).
+        LEFT JOIN verdicts sonnet ON sonnet.id = (
+            SELECT v.id FROM verdicts v
+            WHERE v.listing_id = listings.id AND v.stage = 'sonnet'
+            ORDER BY v.created_at DESC, v.id DESC LIMIT 1
+        )
         WHERE {where_sql}
         ORDER BY listings.id DESC
         {limit_sql}

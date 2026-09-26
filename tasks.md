@@ -591,10 +591,79 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 
 ## Phase 14 — Validation/retry loop for uncertain calls
 
-- [ ] For listings Sonnet marks "uncertain" (e.g. snippet too thin to judge), fetch the full job
+> No such thing as "uncertain" existed before this phase - Sonnet always returned a confident-
+> looking 0-100 score with no way to distinguish "well-informed judgement" from "best guess off a
+> thin teaser description". Added an `uncertain` boolean to `ASSESSMENT_SCHEMA`/`Assessment`
+> (`fit/sonnet.py`), prompted explicitly: still give a best-guess score either way, but flag
+> honestly when the description didn't give enough to judge properly. A listing Sonnet marks
+> uncertain gets an intermediate `sonnet_uncertain` status instead of a normal
+> strong/possible/weak bucket, picked up by the new `fit/retry.py`.
+>
+> `fit/retry.py` fetches the full posting page (`requests` + `BeautifulSoup` - new dependency,
+> strips script/style/nav/footer, capped at `MAX_PAGE_TEXT_CHARS = 6000`) and re-runs the same
+> Sonnet assessment once with that fuller text appended to the original thin description. **Each
+> listing is retried at most once, ever, by construction**: regardless of outcome (resolved, still
+> uncertain even with the full page, or the page couldn't be fetched at all), status always moves
+> out of `sonnet_uncertain` into a real bucket before the function returns for that listing, so
+> next run's query for `sonnet_uncertain` rows won't find it again. The one exception, matching
+> the existing Haiku/Sonnet convention: a *batch-level* failure (a transient API error, not a
+> content judgement) leaves status unchanged so it's retried next run - that's not one of the
+> listing's real chances being spent. A page that can't be fetched at all skips the Sonnet call
+> entirely (no point paying for a re-assessment with no new information) and finalizes immediately
+> from the original score, explicitly marked `uncertain: true, page_fetched: false` rather than
+> silently looking identical to a confident verdict.
+>
+> Reuses `verdicts` the way its own Phase 6 design intended ("keeps history if a listing is ever
+> rescored") - the retry writes a second `stage='sonnet'` row rather than a new stage name, so a
+> listing's full history of re-assessment survives. This surfaced a real latent bug in
+> `webapp/results.py`: `_fetch()`'s `LEFT JOIN verdicts sonnet ON ... stage = 'sonnet'` assumed
+> exactly one row per listing, which a second row would have silently turned into a duplicated
+> listing on every page. Fixed with a correlated subquery picking only the newest `sonnet` row.
+> Also added `sonnet_uncertain` to `PENDING_WHERE` - without it, an uncertain listing with no
+> feedback/hidden state would have fallen through every bucket in the five-way partition and gone
+> uncounted, the exact bug class `webapp/results.py`'s own docstring already warns about from
+> Phase 9. Wired into `coordinator.py` right after the Sonnet pass, using the same
+> `MAX_LISTINGS_PER_RUN`/`MAX_SPEND_PER_RUN_USD` guards as Haiku/Sonnet (Phase 12), since a
+> resolved retry is one more paid Sonnet call per listing. `_listing_detail.html` shows a one-line
+> "Low confidence" note when `uncertain` is set, distinguishing "couldn't fetch the page" from
+> "still thin even with the full page" - the only dashboard change this phase needed.
+>
+> **Verified with minimal real spend** (two isolated calls, ~$0.014 total, before touching any
+> real pipeline data): a deliberately thin synthetic listing ("Great opportunity, apply now")
+> correctly triggered `uncertain: true` with a sensible low score, confirming the widened
+> `ASSESSMENT_SCHEMA` (a 5th field, still `additionalProperties: false`) is still accepted by the
+> real Batches API - exactly the class of schema issue Phase 12's notes warn only surfaces as a
+> real batch error. The same listing given a fuller fabricated description then correctly resolved
+> to `uncertain: false` with a 95 score citing specifics (NHS, explainable AI, health tech) drawn
+> straight from the candidate's real CV/criteria, confirming `build_retry_message` works.
+>
+> **Then one real end-to-end integration test against the live DB** (not just isolated scripts):
+> temporarily marked a real, already-scored listing (`we_work_remotely_programming`, a genuine
+> "Full-Stack Product Engineer" role) as `sonnet_uncertain` and ran `fit.retry` for real. It
+> fetched the actual posting page, re-scored via a real batch call ($0.0165), and correctly
+> revised the score from 25 to 8 after the fuller page revealed a US/Canada-only geo restriction
+> invisible in the original thin RSS description - a genuinely more accurate verdict, not just a
+> plumbing check. Confirmed the `verdicts` table held both rows (`sonnet` stage, scores 25 then 8),
+> confirmed `results.py`'s fixed JOIN returned exactly one row for that listing (the latest, not a
+> duplicate), and confirmed the five-way dashboard stats partition still summed exactly to the
+> total listing count (227) before and after. Restored the listing to its exact pre-test state
+> (deleted the test verdict/cost_log/event rows, reset status) afterward, since it was an
+> artificial trigger for integration testing, not a genuine uncertain verdict from real usage.
+>
+> **A real limitation found along the way, not a bug**: Adzuna's own `redirect_url` links are
+> behind anti-bot protection and return a 403 to any non-browser User-Agent (confirmed directly -
+> a real Adzuna listing's link returned an "Access Denied" page). This means the retry mechanism
+> will essentially always hit the "page unreachable" path for Adzuna-sourced listings specifically
+> - handled correctly by design (graceful finalize, no wasted LLM call), just worth knowing:
+> Adzuna listings that land as `sonnet_uncertain` will typically stay uncertain rather than get
+> resolved, unlike RSS/web-search listings whose direct URLs fetch real page text successfully
+> (verified against five real `the_unijobs` postings, 3.6-6k characters of real job-description
+> text each).
+
+- [x] For listings Sonnet marks "uncertain" (e.g. snippet too thin to judge), fetch the full job
       description page and re-run the fit check with fuller context
-- [ ] Cap retries so this can't spiral in cost
-- [ ] Confirm uncertain cases actually get resolved (or explicitly stay unresolved) rather than
+- [x] Cap retries so this can't spiral in cost
+- [x] Confirm uncertain cases actually get resolved (or explicitly stay unresolved) rather than
       silently guessed at
 
 ## Phase 15 — Company/startup discovery agent

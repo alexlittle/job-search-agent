@@ -15,6 +15,7 @@ STAGE_LABELS = {
     "fetch:web_search": "Web search (find listings)",
     "fit:haiku": "Haiku coarse pass",
     "fit:sonnet": "Sonnet detailed pass",
+    "fit:sonnet_retry": "Sonnet retry (uncertain verdicts)",
 }
 
 

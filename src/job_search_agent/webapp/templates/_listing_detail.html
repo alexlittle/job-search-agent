@@ -16,6 +16,14 @@
 {% elif l.status == 'haiku_no' and l.haiku_reason %}
   <p class="reason">Ruled out by first pass: {{ l.haiku_reason }}</p>
 {% endif %}
+{% if l.uncertain %}
+  <p class="reason">
+    ⚠ Low confidence -
+    {% if l.page_fetched == false %}couldn't fetch the full posting page to check further
+    {% else %}still not enough detail even after reading the full posting
+    {% endif %} - treat this score as a rough guess.
+  </p>
+{% endif %}
 
 <form method="post" action="{{ url_for('results.give_feedback', listing_id=l.id) }}" class="feedback">
   <input type="hidden" name="next" value="{{ request.full_path }}">

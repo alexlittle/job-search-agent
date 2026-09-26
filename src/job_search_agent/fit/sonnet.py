@@ -33,11 +33,20 @@ ASSESSMENT_SCHEMA = {
             "matched_criteria": {"type": "array", "items": {"type": "string"}},
             "concerns": {"type": "array", "items": {"type": "string"}},
             "rationale": {"type": "string"},
+            "uncertain": {"type": "boolean"},
         },
-        "required": ["score", "matched_criteria", "concerns", "rationale"],
+        "required": ["score", "matched_criteria", "concerns", "rationale", "uncertain"],
         "additionalProperties": False,
     },
 }
+
+
+def bucket_for_score(score: int) -> str:
+    if score >= 70:
+        return "strong"
+    if score >= 40:
+        return "possible"
+    return "weak"
 
 
 @dataclass
@@ -46,16 +55,13 @@ class Assessment:
     matched_criteria: list[str] = field(default_factory=list)
     concerns: list[str] = field(default_factory=list)
     rationale: str = "No response"
+    uncertain: bool = False
     cost_usd: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
 
     def bucket(self) -> str:
-        if self.score >= 70:
-            return "strong"
-        if self.score >= 40:
-            return "possible"
-        return "weak"
+        return bucket_for_score(self.score)
 
 
 def build_system_prompt(profile: Profile, feedback_context: str) -> str:
@@ -80,18 +86,22 @@ def build_user_message(listing: sqlite3.Row) -> str:
         "- concerns: specific concerns or genuine uncertainties - if the description doesn't say "
         "enough to judge something (the first-pass note above may already flag one), say so "
         "rather than guessing\n"
-        "- rationale: a short paragraph explaining the score"
+        "- rationale: a short paragraph explaining the score\n"
+        "- uncertain: true if the description above is too thin to judge confidently (a short "
+        "teaser with no real specifics, for example) - still give your best-guess score either "
+        "way, just flag it honestly rather than let a low-information guess look as confident as "
+        "a well-informed one. false if the description gave you enough to judge properly."
     )
 
 
-def _batch_request(listing: sqlite3.Row, system_text: str) -> dict:
+def _batch_request(listing: sqlite3.Row, system_text: str, user_message: str | None = None) -> dict:
     return {
         "custom_id": f"listing-{listing['id']}",
         "params": {
             "model": MODEL,
             "max_tokens": MAX_OUTPUT_TOKENS,
             "system": [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
-            "messages": [{"role": "user", "content": build_user_message(listing)}],
+            "messages": [{"role": "user", "content": user_message or build_user_message(listing)}],
             "output_config": {"format": ASSESSMENT_SCHEMA},
         },
     }
@@ -116,6 +126,7 @@ def _parse_result(result: BatchResult) -> Assessment:
         matched_criteria=out.get("matched_criteria", []),
         concerns=out.get("concerns", []),
         rationale=out.get("rationale", "No response"),
+        uncertain=bool(out.get("uncertain", False)),
         cost_usd=cost_usd,
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
@@ -165,9 +176,16 @@ async def run_sonnet_pass() -> None:
 
             assessment = _parse_result(result)
             bucket = assessment.bucket()
+            # An "uncertain" verdict (Phase 14: description too thin to judge confidently) is
+            # left in an intermediate status rather than a normal strong/possible/weak bucket, so
+            # fit/retry.py can find it and give it one shot at a fuller description (the full
+            # posting page) before it's finalized either way - see PENDING_WHERE in
+            # webapp/results.py, which treats this the same as any other "not fully assessed yet"
+            # status.
+            new_status = "sonnet_uncertain" if assessment.uncertain else f"sonnet_{bucket}"
             conn.execute(
                 "UPDATE listings SET status = ? WHERE id = ?",
-                (f"sonnet_{bucket}", row["id"]),
+                (new_status, row["id"]),
             )
             db.log_verdict(
                 conn,
@@ -181,6 +199,8 @@ async def run_sonnet_pass() -> None:
                         "matched_criteria": assessment.matched_criteria,
                         "concerns": assessment.concerns,
                         "rationale": assessment.rationale,
+                        "uncertain": assessment.uncertain,
+                        "page_fetched": False,
                     }
                 ),
             )
@@ -197,7 +217,8 @@ async def run_sonnet_pass() -> None:
             conn.commit()
             total_cost += assessment.cost_usd
             scored += 1
-            print(f"[{assessment.score:3}/{bucket:8}] {row['title'][:55]}")
+            tag = "uncertain" if assessment.uncertain else bucket
+            print(f"[{assessment.score:3}/{tag:9}] {row['title'][:55]}")
             for c in assessment.matched_criteria:
                 print(f"    + {c}")
             for c in assessment.concerns:
