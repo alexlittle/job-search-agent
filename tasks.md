@@ -411,10 +411,40 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 
 ## Phase 11 — Coordinator agent
 
-- [ ] Build a coordinator that runs the whole pipeline (sources → filter → Haiku → Sonnet →
+- [x] Build a coordinator that runs the whole pipeline (sources → filter → Haiku → Sonnet →
       report) as one orchestrated flow, matching the course's coordinator pattern
-- [ ] Add per-agent turn caps so a bad run can't loop indefinitely
-- [ ] Add basic logging of what the coordinator did at each stage
+- [x] Add per-agent turn caps so a bad run can't loop indefinitely
+- [x] Add basic logging of what the coordinator did at each stage
+
+> `src/job_search_agent/coordinator.py` (`uv run python -m job_search_agent.coordinator
+> [keywords] [--no-web-search]`) runs RSS fetch → web search → pre-filter → Haiku → Sonnet in one
+> call, superseding running `ingest.py`/`filters.py`/`fit/haiku.py`/`fit/sonnet.py` by hand
+> (`ingest.py` itself is unchanged — the coordinator calls its `ingest_rss`/`ingest_web_search`
+> functions directly rather than duplicating them). `--no-web-search` skips the one costly step
+> for a free/cheap RSS-only run, since web search re-runs cost real money every time (no spend
+> guard yet — that's Phase 12).
+>
+> Turn caps per agent already existed before this phase (`max_turns=1` on Haiku/Sonnet's
+> single-call structured output, `max_turns=6` on web search's multi-step tool use) — what this
+> phase actually added was the *retry* half of "turn/retry cap per agent" from the course pattern:
+> `claude_client.call_with_retry()` (2 attempts, catches `ClaudeSDKError`) now wraps each
+> per-listing Haiku/Sonnet call, motivated directly by the transient "Reached maximum number of
+> turns" error hit during Phase 10 testing. A listing that still fails after retrying logs the
+> failure to `events` and is skipped (left in its prior status, so it's picked up again next run)
+> rather than crashing the whole batch. Also fixed the incremental-commit gap noted in Phase 10:
+> `run_haiku_pass`/`run_sonnet_pass` now `conn.commit()` after every listing, not just once at the
+> end, so a mid-run failure no longer loses already-scored results.
+>
+> Coordinator-level logging goes to the `events` table (`stage='coordinator'`) at the start/end of
+> each stage plus a final total-cost line — visible on the dashboard's new **History** page
+> (`/history`, `src/job_search_agent/webapp/history.py`), added because the user asked for one
+> directly: a paginated, newest-first list of every `cost_log` entry (timestamp, stage, model,
+> turns, cost) with a per-stage cost breakdown at the top. Verified live: ran the coordinator with
+> `--no-web-search` (free RSS fetch + pre-filter, 0 listings survived so Haiku/Sonnet correctly did
+> nothing), confirmed the `events` log recorded each stage in order, and confirmed `/history`
+> renders real accumulated data (57 calls, $2.39 total, 3 pages) correctly including the cost
+> breakdown table and pagination. `call_with_retry` unit-tested directly (recovers on a transient
+> failure, raises after exhausting both attempts).
 
 ## Phase 12 — Cost controls & observability
 

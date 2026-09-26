@@ -11,10 +11,10 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 
-from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKError, ResultMessage, query
 
 from job_search_agent import db
-from job_search_agent.claude_client import anthropic_env
+from job_search_agent.claude_client import anthropic_env, call_with_retry
 from job_search_agent.profile import Profile, feedback_examples_context, load_profile
 
 MODEL = "claude-sonnet-5"
@@ -122,7 +122,20 @@ async def run_sonnet_pass() -> None:
         ).fetchone()[0]
 
         for row in rows:
-            assessment = await assess_listing(row, profile, feedback_context)
+            try:
+                assessment = await call_with_retry(
+                    lambda row=row: assess_listing(row, profile, feedback_context)
+                )
+            except ClaudeSDKError as exc:
+                db.log_event(
+                    conn,
+                    stage=STAGE,
+                    message=f"Gave up after retries: {exc}",
+                    listing_id=row["id"],
+                )
+                conn.commit()
+                print(f"[error] {row['title'][:55]} - gave up after retries: {exc}")
+                continue
             bucket = assessment.bucket()
             conn.execute(
                 "UPDATE listings SET status = ? WHERE id = ?",
@@ -151,6 +164,7 @@ async def run_sonnet_pass() -> None:
                 cost_usd=assessment.cost_usd,
                 detail=row["title"],
             )
+            conn.commit()
             total_cost += assessment.cost_usd
             scored += 1
             print(f"[{assessment.score:3}/{bucket:8}] {row['title'][:55]}")

@@ -11,10 +11,10 @@ import asyncio
 import sqlite3
 from dataclasses import dataclass
 
-from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKError, ResultMessage, query
 
 from job_search_agent import db
-from job_search_agent.claude_client import anthropic_env
+from job_search_agent.claude_client import anthropic_env, call_with_retry
 from job_search_agent.profile import Profile, feedback_examples_context, load_profile
 
 MODEL = "claude-haiku-4-5-20251001"
@@ -94,7 +94,20 @@ async def run_haiku_pass() -> None:
         feedback_context = feedback_examples_context(conn)
         rows = conn.execute("SELECT * FROM listings WHERE status = 'pending_fit'").fetchall()
         for row in rows:
-            result = await score_listing(row, profile, feedback_context)
+            try:
+                result = await call_with_retry(
+                    lambda row=row: score_listing(row, profile, feedback_context)
+                )
+            except ClaudeSDKError as exc:
+                db.log_event(
+                    conn,
+                    stage=STAGE,
+                    message=f"Gave up after retries: {exc}",
+                    listing_id=row["id"],
+                )
+                conn.commit()
+                print(f"[error] {row['title'][:60]} - gave up after retries: {exc}")
+                continue
             conn.execute(
                 "UPDATE listings SET status = ? WHERE id = ?",
                 (f"haiku_{result.verdict}", row["id"]),
@@ -114,6 +127,7 @@ async def run_haiku_pass() -> None:
                 cost_usd=result.cost_usd,
                 detail=row["title"],
             )
+            conn.commit()
             total_cost += result.cost_usd
             counts[result.verdict] = counts.get(result.verdict, 0) + 1
             print(f"[{result.verdict:>5}] {row['title'][:60]} - {result.reason}")

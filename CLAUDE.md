@@ -134,9 +134,11 @@ A few design decisions that shape how new code should fit in:
   more than listings: an `events` table is a running activity log (what each pipeline stage did
   and, once Phase 6/7 exist, why a listing was scored the way it was), and a `cost_log` table
   records every LLM call's cost. Any new LLM-calling or fetching code should write to these
-  rather than only printing to console — the dashboard is meant to surface this history, not
-  just final results. `src/job_search_agent/ingest.py` is a temporary stand-in for the Phase 11
-  coordinator; expect it to be superseded once that phase exists.
+  rather than only printing to console — the dashboard is meant to surface this history (the
+  `/history` page, Phase 11), not just final results. `src/job_search_agent/ingest.py` holds the
+  fetch-only functions (`ingest_rss`, `ingest_web_search`); `src/job_search_agent/coordinator.py`
+  (Phase 11) is now the actual entry point for a full run — it calls into `ingest.py`,
+  `filters.py`, and both `fit/` modules in sequence rather than each being run by hand.
 - Dedupe key is normalized (title, company) — not URL, since the same posting on two different
   boards has two different URLs.
 - **Feedback closes the loop back into the fit agents (Phase 10)**: `profile.feedback_examples_context()`
@@ -146,7 +148,15 @@ A few design decisions that shape how new code should fit in:
   `fit/haiku.build_prompt()` and `fit/sonnet.build_prompt()`, right after the CV/criteria block.
   Fetched once per run, not once per listing, since it's the same for every listing in a run.
   Verified live: both stages now cite specific past feedback in their reasoning (e.g. ruling out
-  a PhD-gated research-fellow role because the user had already rejected that pattern). Both
-  `run_haiku_pass()`/`run_sonnet_pass()` commit only once, at the end of the run — a crash partway
-  through loses that whole run's results (nothing corrupted, just re-run), a known gap not yet
-  worth fixing given how cheap and safe a re-run is at current volumes.
+  a PhD-gated research-fellow role because the user had already rejected that pattern).
+- **The coordinator (Phase 11)** wires the whole pipeline into one call
+  (`uv run python -m job_search_agent.coordinator [keywords] [--no-web-search]`), following the
+  course's "specialist agents + coordinator" pattern. Two things it adds beyond just calling each
+  stage in sequence, both motivated directly by a transient failure hit during Phase 10's live
+  testing: `claude_client.call_with_retry()` wraps each per-listing Haiku/Sonnet call (2 attempts,
+  catches `ClaudeSDKError`) so one flaky API response doesn't crash a whole batch — a listing that
+  still fails after retrying is logged and skipped, left in its prior status so it's retried next
+  run rather than lost. `run_haiku_pass()`/`run_sonnet_pass()` also now `conn.commit()` after every
+  listing rather than once at the end of the run, so a failure partway through no longer loses
+  already-scored results from that same run. Turn caps per agent call already existed
+  (`max_turns=1` on Haiku/Sonnet, `max_turns=6` on web search) — the retry cap is what was missing.
