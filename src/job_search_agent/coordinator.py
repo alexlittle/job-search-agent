@@ -1,4 +1,5 @@
-"""Runs the whole pipeline as one orchestrated flow: sources -> pre-filter -> Haiku -> Sonnet.
+"""Runs the whole pipeline as one orchestrated flow: sources (RSS, Adzuna, web search) ->
+pre-filter -> Haiku -> Sonnet.
 The Phase 11 coordinator - supersedes calling `ingest.py`, `filters.py`, `fit/haiku.py`, and
 `fit/sonnet.py` by hand in sequence, matching the course's coordinator pattern (a single entry
 point wiring the specialist agents together).
@@ -26,7 +27,7 @@ from job_search_agent import db
 from job_search_agent.filters import run_filters
 from job_search_agent.fit.haiku import run_haiku_pass
 from job_search_agent.fit.sonnet import run_sonnet_pass
-from job_search_agent.ingest import ingest_rss, ingest_web_search
+from job_search_agent.ingest import ingest_adzuna, ingest_rss, ingest_web_search
 
 STAGE = "coordinator"
 
@@ -43,6 +44,7 @@ async def run_pipeline(keywords: str = "python", include_web_search: bool = True
     print("== Fetching listings ==")
     with db.connect() as conn:
         ingest_rss(conn, keywords=keywords)
+        ingest_adzuna(conn, role=None)
         if include_web_search:
             await ingest_web_search(conn, role=None)
     _log("Finished fetching listings")

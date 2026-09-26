@@ -274,6 +274,19 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 - [x] Step 4 — capture a run-frequency preference (store only — Phase 17 is what would act on it)
 - [x] On completion, redirect into the normal results dashboard
 
+> **Follow-up cleanup (2026-09-26, prompted by real use during Phase 13):** `profile/criteria.yaml`
+> and its tracked template `profile/criteria.example.yaml` were removed. Both were originally the
+> file-based bootstrap path this section superseded once the onboarding wizard existed - Step 3's
+> GET handler already caught `load_criteria()`'s `FileNotFoundError` and fell back to an empty
+> `Criteria()` for the form, so the example was never actually load-bearing for a dashboard-first
+> setup, and the personal `criteria.yaml` had already drifted from the DB (a role added later via
+> the dashboard was never reflected back into the file). `profile.load_criteria()` still seeds the
+> DB from a hand-written `profile/criteria.yaml` if one exists, for anyone who prefers running the
+> pipeline scripts directly over the dashboard, but no longer requires one - its `FileNotFoundError`
+> now points at the onboarding wizard instead of a template file that no longer exists.
+> `profile/cv.example.md` was deliberately left alone - CV upload isn't gated the same way (Step 2
+> does real extraction, but a user editing `cv.md` by hand instead still needs to know its format).
+
 ## Phase 9 — User feedback capture
 
 > Added a `feedback` column to `listings` (TEXT, `relevant`/`not_relevant`/NULL) via a real
@@ -507,10 +520,73 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 
 ## Phase 13 — Second structured source agent (Adzuna API)
 
-- [ ] Implement an Adzuna API fetcher producing the same `Listing` shape from Phase 2
-- [ ] Plug it into the existing pipeline with no changes needed downstream — proves the
+> `src/job_search_agent/sources/adzuna.py` is the first bespoke (non-RSS) source module,
+> implementing the `fetch_listings(...) -> list[Listing]` plugin interface documented in
+> `sources/__init__.py` for real: an authenticated JSON API rather than something `feedparser`
+> already understands. `fetch_all()` loops over `criteria.roles` and does one search per role
+> (same pattern as `web_search.search_all`), defaulting to `country="gb"` (matching the existing
+> RSS feeds' hardcoded `countrycode: GB`, not worth generalizing yet). No `cost_log` entries -
+> Adzuna's free tier isn't priced in Claude tokens, so unlike `web_search.py` there's nothing to
+> record.
+>
+> **Adzuna credentials are optional, unlike `ANTHROPIC_API_KEY`/`CONTACT_EMAIL`** - a deliberate
+> difference from those two. This is an *added* source on top of an already-working pipeline, not
+> a new hard requirement for every user; `ingest.ingest_adzuna` checks `adzuna.have_credentials()`
+> first and skips with a logged event + console message if unset, rather than crashing the whole
+> coordinator run the way `require_credentials()` (used only when running the module directly)
+> would. Verified live: running with `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` deliberately unset skips
+> cleanly with `Adzuna: skipped (no API credentials set in .env).` and a matching `events` row,
+> nothing else in the run affected.
+>
+> Verified live end to end with real credentials: fetched 20 real UK listings for a single role
+> (`AI/ML Engineer` - Sainsbury's, BAE Systems, Siemens, etc., all with working `redirect_url`
+> links), then 37 across all four configured roles via `ingest.ingest_adzuna`, of which 34 were
+> new and 3 were skipped as duplicates - confirmed (by recomputing dedupe keys against a fresh
+> fetch) those 3 were the *same job* surfacing under two different role searches (e.g. a
+> Sainsbury's "AI/ML Engineer" posting matched by both the `AI/ML Engineer` and `Research/Data
+> Science` searches), not a bug - direct proof the source-blind `UNIQUE` dedupe constraint works
+> on Adzuna's own overlapping results, via the exact same code path a cross-source collision would
+> hit. A second `ingest_adzuna` run against the same DB found 0 new (idempotent, matching the
+> Phase 4 rerun check). No genuine overlap turned up between Adzuna and the RSS/web-search sources
+> in this data - expected, not a gap: Adzuna's UK corporate-recruiter listings and the academic RSS
+> feeds/curated web-search results are just different postings in practice, but the mechanism
+> itself (a single `dedupe_key` computed the same way regardless of `source`) is what's being
+> proven, and it needed no Adzuna-specific code to work.
+>
+> Confirmed zero downstream changes needed: ran `filters.run_filters()` immediately after the
+> Adzuna ingest with no code changes, and it processed the new `adzuna`-sourced rows exactly like
+> any other source, using the same rule-based logic as RSS/search listings with no special-casing.
+> Wired into both `ingest.py` (`ingest_adzuna`, run alongside `ingest_rss` in `main()`) and
+> `coordinator.py` (called right after `ingest_rss`, before the costlier web search step) - the
+> coordinator's Haiku/Sonnet passes will pick up the surviving Adzuna listings on the next run
+> without any change to those stages either.
+>
+> **Follow-up bug, found immediately from real usage:** the first live run filtered 18 of 34
+> Adzuna listings, most on location - e.g. "Belfast, Northern Ireland" and "Woking, Surrey" were
+> rejected as not matching "UK-wide (open to relocation)" in criteria, which looked at first like
+> a criteria-data problem but wasn't: `filters.py`'s location check is plain word-overlap, and
+> `"uk"` was already present in the criteria's word set - the actual bug was on the *listing*
+> side. `_to_listing()` only used Adzuna's `location.display_name` (e.g. "Belfast, Northern
+> Ireland"), which never mentions the country, while Adzuna's own `location.area` field is a
+> broad-to-narrow hierarchy (`["UK", "Northern Ireland", "Belfast"]`) that does. Fixed with a
+> `_location_text()` helper that appends `area[0]` (the country) to `display_name` when it isn't
+> already present, so "UK-wide" can match on the word "uk" the way it's meant to. Also confirmed,
+> while diagnosing this, that criteria.yaml has no effect once the DB is seeded (Phase 8) - the
+> live criteria (fetched via `db.get_criteria`) had already diverged from the file (missing a
+> fourth role added to the DB later via the dashboard), so any fix here had to be a code fix, not
+> a criteria edit, which wouldn't have touched the actual bug anyway.
+>
+> Verified live: deleted the 34 test-only Adzuna rows inserted during initial verification (none
+> had feedback/hidden state set), re-ran `ingest_adzuna` + `run_filters()` with the fix in place -
+> Belfast and both Woking listings now correctly survive to `pending_fit`, and location dropped
+> out of the filter reasons entirely (10 filtered, all now for legitimate reasons - "Full Stack
+> Developer"/"Backend Engineer"-type titles with no role/keyword overlap, one "banking" dealbreaker
+> - 24 kept for scoring, up from 16 before the fix).
+
+- [x] Implement an Adzuna API fetcher producing the same `Listing` shape from Phase 2
+- [x] Plug it into the existing pipeline with no changes needed downstream — proves the
       pluggable-source design actually works
-- [ ] Confirm dedupe correctly merges overlapping postings across all sources (RSS, search,
+- [x] Confirm dedupe correctly merges overlapping postings across all sources (RSS, search,
       Adzuna)
 
 ## Phase 14 — Validation/retry loop for uncertain calls

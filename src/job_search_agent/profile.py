@@ -1,9 +1,10 @@
 """Loads the user's CV + job-search criteria into a single context block for the agents.
 
 The CV lives in profile/cv.md (gitignored) - see profile/cv.example.md for the format.
-Criteria live in the database (Phase 8 on), seeded once from profile/criteria.example.yaml's
-sibling profile/criteria.yaml the first time it's needed; after that, the DB is the source of
-truth and the dashboard's criteria page (not the YAML file) is how you change it.
+Criteria live in the database - the dashboard's onboarding wizard (Phase 8) collects them via a
+form on first run and the criteria page is how you change them after that. `load_criteria()` can
+also seed the DB from a hand-written profile/criteria.yaml if one exists, for anyone who prefers
+running the pipeline scripts directly over using the dashboard, but that file isn't required.
 
 Run with: uv run python -m job_search_agent.profile
 """
@@ -132,9 +133,9 @@ def load_criteria(profile_dir: Path | str | None = None) -> Criteria:
         if data is None:
             if not criteria_path.exists():
                 raise FileNotFoundError(
-                    f"No criteria in the database yet, and {criteria_path} doesn't exist "
-                    "either. Copy profile/criteria.example.yaml to profile/criteria.yaml and "
-                    "fill it in, or set criteria via the dashboard's Criteria page."
+                    "No criteria set yet. Run the dashboard's onboarding wizard "
+                    "(uv run python -m job_search_agent.webapp), or write your own "
+                    f"{criteria_path} by hand if you'd rather not use the web UI."
                 )
             data = yaml.safe_load(criteria_path.read_text(encoding="utf-8")) or {}
             db.save_criteria(conn, data)

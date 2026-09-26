@@ -12,7 +12,7 @@ import sqlite3
 import sys
 
 from job_search_agent import db
-from job_search_agent.sources import generic_rss, web_search
+from job_search_agent.sources import adzuna, generic_rss, web_search
 
 
 def ingest_rss(conn: sqlite3.Connection, keywords: str) -> None:
@@ -27,6 +27,26 @@ def ingest_rss(conn: sqlite3.Connection, keywords: str) -> None:
         ),
     )
     print(f"RSS: {len(listings)} fetched, {inserted} new.")
+
+
+def ingest_adzuna(conn: sqlite3.Connection, role: str | None = None) -> None:
+    if not adzuna.have_credentials():
+        db.log_event(
+            conn,
+            stage="fetch:adzuna",
+            message="Skipped - ADZUNA_APP_ID/ADZUNA_APP_KEY not set in .env",
+        )
+        print("Adzuna: skipped (no API credentials set in .env).")
+        return
+
+    listings = adzuna.fetch_all(role=role)
+    inserted = db.save_listings(conn, listings)
+    db.log_event(
+        conn,
+        stage="fetch:adzuna",
+        message=f"Fetched {len(listings)} listing(s) from Adzuna ({inserted} new)",
+    )
+    print(f"Adzuna: {len(listings)} fetched, {inserted} new.")
 
 
 async def ingest_web_search(conn: sqlite3.Connection, role: str | None) -> None:
@@ -54,6 +74,7 @@ def main() -> None:
     keywords = sys.argv[1] if len(sys.argv) > 1 else "python"
     with db.connect() as conn:
         ingest_rss(conn, keywords=keywords)
+        ingest_adzuna(conn, role=None)
         asyncio.run(ingest_web_search(conn, role=None))
 
 
