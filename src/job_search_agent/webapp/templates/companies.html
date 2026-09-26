@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Companies to Watch - Job Search Agent{% endblock %}
+{% block content %}
+<h1>Companies to Watch</h1>
+<p class="stats">
+  {{ total }} compan{{ 'y' if total == 1 else 'ies' }} found so far via discovery runs
+  (<code>uv run python -m job_search_agent.companies</code>) - not a job listing, a company worth
+  watching for a speculative application.
+</p>
+
+{% for label, leads in groups.items() %}
+<div class="group">
+  <h2>{{ label }} ({{ leads|length }})</h2>
+  {% if not leads %}
+    <p class="empty">None yet.</p>
+  {% endif %}
+  {% for c in leads %}
+    {% include "_company_card.html" %}
+  {% endfor %}
+</div>
+{% endfor %}
+{% endblock %}

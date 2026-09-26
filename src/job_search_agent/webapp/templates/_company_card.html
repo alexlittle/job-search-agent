@@ -1,0 +1,29 @@
+{# Expects: c (a company_leads row as a dict), saved_id #}
+<div class="listing">
+  <div class="listing-header">
+    <div>
+      <h3><a href="{{ c.careers_url }}" target="_blank" rel="noopener">{{ c.name }}</a></h3>
+      <div class="meta">{{ c.sector }} &middot; {{ c.stage }} &middot; source: {{ c.source }}</div>
+    </div>
+  </div>
+  <p>{{ c.why_relevant }}</p>
+  {% if c.notes %}<p class="reason">{{ c.notes }}</p>{% endif %}
+
+  <form method="post" action="{{ url_for('companies.give_feedback', company_id=c.id) }}" class="feedback">
+    <input type="hidden" name="next" value="{{ request.full_path }}">
+    <input type="text" name="note" placeholder="Add a note (optional)" value="{{ c.feedback_note or '' }}">
+    <div class="feedback-buttons">
+      <button type="submit" name="feedback" value="relevant" {% if c.feedback == 'relevant' %}disabled{% endif %}>
+        {{ 'Marked relevant' if c.feedback == 'relevant' else 'Relevant' }}
+      </button>
+      <button type="submit" name="feedback" value="already_known" {% if c.feedback == 'already_known' %}disabled{% endif %}>
+        {{ 'Marked already known' if c.feedback == 'already_known' else 'Already known' }}
+      </button>
+      <button type="submit" name="feedback" value="not_relevant" {% if c.feedback == 'not_relevant' %}disabled{% endif %}>
+        {{ 'Marked not relevant' if c.feedback == 'not_relevant' else 'Not relevant' }}
+      </button>
+      <button type="submit" name="feedback" value="">Save note</button>
+    </div>
+    {% if saved_id == c.id %}<span class="saved-indicator">Saved</span>{% endif %}
+  </form>
+</div>

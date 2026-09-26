@@ -671,17 +671,84 @@ the system isn't limited to boards/APIs you thought to configure — see Phase 3
 This is a different kind of output from a job listing: not "here's a role to apply for" but
 "here's a company worth following, that might be worth a speculative application."
 
-- [ ] Define a `CompanyLead` shape distinct from `Listing`: name, sector/stage, why relevant,
+> **Deliberately kept out of `coordinator.py` entirely** - the user's own call, made explicitly
+> for cost control: new companies/startups worth watching turn up far less often than new job
+> postings, so this pipeline should eventually run on a separate, much less frequent schedule once
+> Phase 17 wires up real scheduling. `companies.py` (top-level, sibling to `ingest.py`) is a fully
+> standalone entry point (`uv run python -m job_search_agent.companies`) - nothing in the job
+> pipeline calls it, and nothing here calls back into the job pipeline. Confirmed by grepping
+> `coordinator.py` for any company-related reference: none.
+>
+> `company_lead.py` defines `CompanyLead` (name, sector, stage, why_relevant, careers_url, notes,
+> source) as a genuinely separate shape from `Listing`, per the brief - no title/posted_date (not
+> a role), a sector/stage instead.
+>
+> **Discovery and "why follow this" are one combined call, not two LLM stages.** The checklist
+> below reads like it wants a separate lighter fit-agent step, but there's no volume/tiering
+> problem to solve here the way there is for job listings (Haiku screening thousands down to what
+> Sonnet needs to see) - a second call would just double the cost of an already-more-expensive,
+> multi-turn search for no real benefit. `sources/company_discovery.py` reuses the exact WebSearch
+> tool pattern from Phase 3's `web_search.py` (same `ClaudeAgentOptions`, `permission_mode=
+> "bypassPermissions"`, Haiku, structured `output_format`), asking for `why_relevant` directly in
+> the same structured-output schema as the discovery results themselves. Also reuses
+> `web_search.SearchCost` rather than duplicating an identical dataclass.
+>
+> New `company_leads` table (`db.py`) with its own dedupe (normalized company name, not
+> title+company - there's no second field to key on) and **3-valued feedback**
+> (`relevant`/`not_relevant`/`already_known`) rather than listings' 2-valued column, per the
+> phase's own wording - "I already know this one" is a genuinely different signal from "not
+> relevant" (don't resurface vs. this suggestion was bad). `db.set_company_feedback`/
+> `set_company_note` name the company directly in their `events` log message rather than adding a
+> second nullable FK column to `events` (which is FK'd to `listings`) for one activity-log use.
+>
+> `webapp/companies.py` + `templates/companies.html`/`_company_card.html`: a single unpaginated
+> page grouped by feedback state (To review / Marked relevant / Already known / Not relevant) -
+> no need for the excluded/rejected/hidden multi-page treatment `webapp/results.py` needed, since
+> this runs far less often and won't accumulate the same volume. Reused `results._redirect_with_
+> saved` (generalized with a `default_endpoint` param) rather than duplicating the next-URL/saved-
+> marker redirect logic. Registered without a Flask blueprint `url_prefix`, matching every other
+> blueprint's convention of absolute route paths (`url_prefix` would have made `/companies`
+> 308-redirect to `/companies/`, caught in live testing).
+>
+> `profile.company_feedback_examples_context()` mirrors Phase 10's `feedback_examples_context()`
+> as a separate function (not a shared/parameterized one) since the feedback vocabularies and
+> source tables genuinely differ. `companies.py`'s entry point fetches it once per run and passes
+> it into the discovery prompt, same shape as the job pipeline's loop.
+>
+> **Verified live end to end, real spend $0.5862** (one multi-turn WebSearch run, in line with
+> Phase 3's per-call cost range): found 10 real, well-targeted companies (Kheiron, Limbic AI,
+> Accurx, Brainomix, IDOVEN, etc.) with `why_relevant` text genuinely citing the candidate's actual
+> background per company - the XAI-in-healthcare thesis, the Madrid relocation interest, the OSS
+> history - not generic pitches, confirming the combined discovery+judgement call works as
+> intended. Confirmed dedupe/storage (10 new, 0 skipped), rendered the dashboard page for real (all
+> 10 shown under "To review"), exercised all three feedback states plus a note-only save through
+> the real Flask test client, confirmed persistence and correct regrouping afterward, confirmed the
+> `saved=` confirmation indicator renders, confirmed `/history` picks up the new `discover:
+> companies` cost-log stage with its label, and confirmed `company_feedback_examples_context()`
+> renders the exact feedback block that would be fed into the next discovery run. Cleared the test
+> feedback and its `events` rows afterward (it was fabricated for verification, not the
+> candidate's real opinion) - the 10 discovered companies themselves are real and stayed, now
+> sitting under "To review" for an actual first look.
+>
+> **A real limitation found, not a bug**: one of the ten results (Hologen AI) came back with a
+> `careers_url` that doesn't actually match the company (it pointed at what looks like an
+> unrelated company's job listing page) - a genuine WebSearch/model accuracy miss despite the
+> prompt's explicit instruction to only return real, working URLs it's confident about (the same
+> instruction Phase 3's job search prompt uses, which has the same known limitation). Not something
+> code can fully guard against; worth knowing when using this feature that `careers_url` should be
+> spot-checked, not trusted blindly.
+
+- [x] Define a `CompanyLead` shape distinct from `Listing`: name, sector/stage, why relevant,
       careers/about page link, notes, source
-- [ ] Add a search-based discovery agent (reusing the Phase 3 pattern) that looks for companies/
+- [x] Add a search-based discovery agent (reusing the Phase 3 pattern) that looks for companies/
       startups matching your criteria (sector, stage, location, mission) even when no specific job
       is advertised
-- [ ] Add a "why follow this" judgement step (a lighter version of the fit agent) that explains
+- [x] Add a "why follow this" judgement step (a lighter version of the fit agent) that explains
       relevance rather than scoring against a specific job posting
-- [ ] Store company leads in their own table, with the same feedback mechanism as listings
+- [x] Store company leads in their own table, with the same feedback mechanism as listings
       (relevant / not relevant / already known)
-- [ ] Add a "Companies to watch" section to the dashboard, separate from job listings
-- [ ] Feed company-lead feedback into the Phase 10 learning loop the same way as listing feedback
+- [x] Add a "Companies to watch" section to the dashboard, separate from job listings
+- [x] Feed company-lead feedback into the Phase 10 learning loop the same way as listing feedback
 
 ## Phase 16 — Make it reusable by others
 

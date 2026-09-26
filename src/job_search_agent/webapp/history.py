@@ -16,6 +16,7 @@ STAGE_LABELS = {
     "fit:haiku": "Haiku coarse pass",
     "fit:sonnet": "Sonnet detailed pass",
     "fit:sonnet_retry": "Sonnet retry (uncertain verdicts)",
+    "discover:companies": "Company discovery",
 }
 
 

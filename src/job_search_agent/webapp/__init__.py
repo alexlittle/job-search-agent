@@ -10,12 +10,14 @@ from flask import Flask, redirect, request, url_for
 def create_app() -> Flask:
     app = Flask(__name__)
 
+    from job_search_agent.webapp.companies import companies_bp
     from job_search_agent.webapp.criteria import criteria_bp
     from job_search_agent.webapp.history import history_bp
     from job_search_agent.webapp.onboarding import next_incomplete_step, onboarding_bp
     from job_search_agent.webapp.results import results_bp
 
     app.register_blueprint(results_bp)
+    app.register_blueprint(companies_bp)
     app.register_blueprint(criteria_bp)
     app.register_blueprint(history_bp)
     app.register_blueprint(onboarding_bp)

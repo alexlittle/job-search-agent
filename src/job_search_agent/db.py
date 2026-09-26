@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
+from job_search_agent.company_lead import CompanyLead
 from job_search_agent.listing import Listing
 
 DB_PATH = Path(__file__).resolve().parents[2] / "data" / "job_search.db"
@@ -81,6 +82,27 @@ CREATE TABLE IF NOT EXISTS criteria (
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+-- Company/startup leads (Phase 15) - a distinct table from listings, not a variant of it: "worth
+-- following" is a different judgement from "fits this specific posting", made once at discovery
+-- time rather than through the multi-stage listings pipeline (see company_lead.py). Dedupe is by
+-- normalized company name alone (no title/company pair to key on here). feedback is 3-valued
+-- (relevant / not_relevant / already_known) rather than listings' 2-valued column - "I already
+-- know this one" is a genuinely different signal from "not relevant".
+CREATE TABLE IF NOT EXISTS company_leads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dedupe_key TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    sector TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    why_relevant TEXT NOT NULL,
+    careers_url TEXT NOT NULL,
+    notes TEXT NOT NULL,
+    source TEXT NOT NULL,
+    feedback TEXT,
+    feedback_note TEXT,
+    first_seen TEXT NOT NULL
 );
 """
 
@@ -270,6 +292,79 @@ def get_feedback_examples(conn: sqlite3.Connection, limit: int = 20) -> list[sql
         WHERE listings.feedback IS NOT NULL
         GROUP BY listings.id
         ORDER BY feedback_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
+def _company_dedupe_key(name: str) -> str:
+    return hashlib.sha256(name.strip().lower().encode("utf-8")).hexdigest()
+
+
+def save_company_leads(conn: sqlite3.Connection, leads: list[CompanyLead]) -> int:
+    """Insert company leads not already seen (by normalized name). Returns how many were new."""
+    inserted = 0
+    now = datetime.now(UTC).isoformat()
+    for lead in leads:
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO company_leads
+                (dedupe_key, name, sector, stage, why_relevant, careers_url, notes, source,
+                 first_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _company_dedupe_key(lead.name),
+                lead.name,
+                lead.sector,
+                lead.stage,
+                lead.why_relevant,
+                lead.careers_url,
+                lead.notes,
+                lead.source,
+                now,
+            ),
+        )
+        if cursor.rowcount:
+            inserted += 1
+    return inserted
+
+
+def _company_name(conn: sqlite3.Connection, company_id: int) -> str:
+    row = conn.execute("SELECT name FROM company_leads WHERE id = ?", (company_id,)).fetchone()
+    return row["name"] if row else f"#{company_id}"
+
+
+def set_company_feedback(
+    conn: sqlite3.Connection, company_id: int, feedback: str, note: str | None = None
+) -> None:
+    name = _company_name(conn, company_id)
+    conn.execute(
+        "UPDATE company_leads SET feedback = ?, feedback_note = ? WHERE id = ?",
+        (feedback, note, company_id),
+    )
+    message = f"{name}: marked as {feedback}" + (f" — {note}" if note else "")
+    # events.listing_id is FK'd to listings, not company_leads, so the company is named in the
+    # message text instead rather than adding a second nullable FK column for one activity-log use.
+    log_event(conn, stage="company_feedback", message=message)
+
+
+def set_company_note(conn: sqlite3.Connection, company_id: int, note: str | None) -> None:
+    name = _company_name(conn, company_id)
+    conn.execute("UPDATE company_leads SET feedback_note = ? WHERE id = ?", (note, company_id))
+    log_event(conn, stage="company_feedback", message=f"{name}: note updated — {note}")
+
+
+def get_company_feedback_examples(conn: sqlite3.Connection, limit: int = 20) -> list[sqlite3.Row]:
+    """Most recent company leads the user gave feedback on, for feeding into the discovery
+    agent's prompt as examples (Phase 15, same idea as get_feedback_examples for listings)."""
+    return conn.execute(
+        """
+        SELECT id, name, sector, feedback, feedback_note, first_seen
+        FROM company_leads
+        WHERE feedback IS NOT NULL
+        ORDER BY first_seen DESC
         LIMIT ?
         """,
         (limit,),

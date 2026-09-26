@@ -123,6 +123,37 @@ def feedback_examples_context(conn: sqlite3.Connection, limit: int = FEEDBACK_EX
     return "\n".join(lines)
 
 
+def company_feedback_examples_context(
+    conn: sqlite3.Connection, limit: int = FEEDBACK_EXAMPLES_LIMIT
+) -> str:
+    """Same idea as feedback_examples_context, for company leads (Phase 15) - a separate function
+    rather than a shared/parameterized one, since the two feedback vocabularies genuinely differ
+    (3-valued relevant/not_relevant/already_known here vs. 2-valued for listings) and read from a
+    different table."""
+    rows = db.get_company_feedback_examples(conn, limit=limit)
+    if not rows:
+        return ""
+
+    labels = {
+        "relevant": "RELEVANT",
+        "not_relevant": "NOT RELEVANT",
+        "already_known": "ALREADY KNOWN",
+    }
+    lines = [
+        "## Feedback from past company leads",
+        "The candidate has already given feedback on these company leads from earlier runs. Use "
+        "it to calibrate judgement on similar companies - 'already known' means don't bother "
+        "resurfacing companies like this one, not that it was a bad suggestion.",
+    ]
+    for row in rows:
+        verdict = labels.get(row["feedback"], row["feedback"])
+        line = f"- [{verdict}] {row['name']} ({row['sector']})"
+        if row["feedback_note"]:
+            line += f' - candidate said: "{row["feedback_note"]}"'
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def load_criteria(profile_dir: Path | str | None = None) -> Criteria:
     """Reads criteria from the DB, seeding it once from criteria.yaml if the DB is empty."""
     directory = Path(profile_dir or os.environ.get("PROFILE_DIR") or DEFAULT_PROFILE_DIR)

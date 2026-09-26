@@ -108,10 +108,12 @@ def _current_page() -> int:
     return request.args.get("page", 1, type=int)
 
 
-def _redirect_with_saved(next_url: str | None, listing_id: int):
-    parts = urlsplit(next_url or url_for("results.index"))
+def _redirect_with_saved(next_url: str | None, item_id: int, default_endpoint: str = "results.index"):
+    """Shared by webapp/companies.py too (Phase 15) - the "redirect back to wherever this form
+    was submitted from, with a ?saved= marker" logic isn't listings-specific."""
+    parts = urlsplit(next_url or url_for(default_endpoint))
     query = dict(parse_qsl(parts.query))
-    query["saved"] = str(listing_id)
+    query["saved"] = str(item_id)
     return redirect(
         urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
     )
