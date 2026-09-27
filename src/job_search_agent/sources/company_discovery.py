@@ -3,7 +3,7 @@
 a role to apply for". Same WebSearch tool pattern as sources/web_search.py, but this is a single
 combined call per run rather than one search per role: discovery and the "why follow this"
 judgement happen together in one structured-output call (this is the "lighter version of the fit
-agent" tasks.md Phase 15 asks for - there's no volume/tiering problem to solve here the way there
+agent" docs/tasks.md Phase 15 asks for - there's no volume/tiering problem to solve here the way there
 is for job listings, so a second LLM stage would just double the cost for no real benefit).
 
 Deliberately NOT wired into coordinator.py - new companies/startups worth watching turn up far

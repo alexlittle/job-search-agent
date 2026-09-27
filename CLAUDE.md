@@ -8,7 +8,7 @@ A customisable multi-agent job search assistant, built incrementally with the
 [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python). It finds job listings
 and companies worth watching and scores them against the user's CV/preferences — it never applies
 to anything on the user's behalf. See `docs/brief.md` for the original brief and design rationale, and
-`tasks.md` for the phased build plan this project is following (check items off there as they're
+`docs/tasks.md` for the phased build plan this project is following (check items off there as they're
 completed — **do not build ahead of the current phase** without the user's agreement; this project
 is deliberately being built step by step so the user can follow how each piece works).
 
@@ -21,7 +21,7 @@ uv add <package>                           # add a new dependency
 ```
 
 There is no test suite, lint config, or build step yet — these will be introduced as later phases
-in `tasks.md` need them. Don't add tooling (pytest, ruff, etc.) speculatively; add it in the phase
+in `docs/tasks.md` need them. Don't add tooling (pytest, ruff, etc.) speculatively; add it in the phase
 that actually needs it.
 
 ## Authentication
@@ -45,7 +45,7 @@ waiting for interactive approval that never comes in an unattended script. See
 ## Architecture
 
 Package layout is `src/job_search_agent/` (uv-managed, src-layout, Python >=3.12). The pipeline is
-being built in this shape (see `tasks.md` for the full phase-by-phase breakdown and current
+being built in this shape (see `docs/tasks.md` for the full phase-by-phase breakdown and current
 status):
 
 ```
@@ -70,7 +70,7 @@ A few design decisions that shape how new code should fit in:
   explicitly prohibits scraping/automation; it's handled via the user's own email job alerts,
   outside this system).
 - **Cost controls are part of the design, not an afterthought**: turn caps, spend guards, and
-  prompt caching for the repeated profile/criteria block are explicit phases in `tasks.md`, not
+  prompt caching for the repeated profile/criteria block are explicit phases in `docs/tasks.md`, not
   optional hardening. The fit-agent stages (Phase 6/7) were built first as ordinary synchronous
   `claude-agent-sdk` calls, then switched to the Anthropic Message Batches API in Phase 12 — that
   was a deliberate two-step sequence (get it working, then make it cheaper), not an oversight.

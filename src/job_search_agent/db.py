@@ -1,7 +1,7 @@
 """Local SQLite storage: listings, an activity log, and a cost log.
 
 One file (data/job_search.db, gitignored - personal data), shared by every stage of the
-pipeline. See tasks.md Phase 4.
+pipeline. See docs/tasks.md Phase 4.
 
 Dedupe is by normalized (title, company), not URL - the same posting on two different boards
 will have two different URLs, so matching on URL would miss exactly the cross-source duplicates

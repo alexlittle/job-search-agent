@@ -1,6 +1,6 @@
 """First-run setup wizard: API key + contact email -> .env, CV upload -> profile/cv.md, a
 criteria form, and a schedule-frequency preference. Exists so someone other than the original
-author can get this running without hand-editing config files - see tasks.md Phase 8 and
+author can get this running without hand-editing config files - see docs/tasks.md Phase 8 and
 docs/brief.md's follow-up decisions.
 
 The schedule step only *stores* the preference; actually running on a schedule is still Phase 17.

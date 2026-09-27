@@ -1,5 +1,5 @@
 """Local Flask dashboard: view results, edit criteria, give feedback, and (later) onboard a new
-user. Reads directly from the SQLite store - no separate report file. See tasks.md Phase 8.
+user. Reads directly from the SQLite store - no separate report file. See docs/tasks.md Phase 8.
 
 Run with: uv run python -m job_search_agent.webapp
 """

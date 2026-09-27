@@ -776,7 +776,7 @@ This is a different kind of output from a job listing: not "here's a role to app
 > Wrote `README.md` (previously just the project title) - setup, running the coordinator vs. the
 > separate company-discovery pipeline, how to add a new source (RSS via config, or a bespoke
 > `fetch_listings()` module), where criteria/CV/`.env` configuration lives, and the cost-control
-> knobs, all pointing back to `CLAUDE.md`/`tasks.md` for the full design rationale rather than
+> knobs, all pointing back to `CLAUDE.md`/`docs/tasks.md` for the full design rationale rather than
 > duplicating it. Kept deliberately short per the phase's own brief, not a rewrite of `CLAUDE.md`.
 
 - [x] Move all personal specifics (CV, criteria, source list, search query templates) out of code
@@ -846,7 +846,55 @@ This is a different kind of output from a job listing: not "here's a role to app
 
 ## Phase 17 — Stretch: scheduling
 
-- [ ] Wire the coordinator to run on a schedule (cron or similar) with the spend guard from
+> Talked through the design space with the user before building anything (four real questions,
+> all worth recording since they shape what did and didn't get built):
+> 1. **Jobs and companies get independent schedules** - already true by construction since Phase
+>    15 kept `companies.py` fully separate from `coordinator.py`; this phase didn't need to add
+>    anything for that, just confirm it.
+> 2. **OS cron, not a dashboard-driven scheduler** - the user's explicit choice, made after
+>    weighing the tradeoff: cron needs zero new code (just a documented crontab line) but means the
+>    onboarding wizard's existing "how often do you plan to run this?" preference (Phase 8, always
+>    store-only) stays store-only *by design* now, not just "not built yet" - there is no plan to
+>    wire the dashboard into scheduling. The alternative (an in-app scheduler, e.g. a background
+>    thread) would have made that preference actually do something automatically, at the cost of
+>    needing a continuously-running process and real added complexity - explicitly not worth it for
+>    what this project needs.
+> 3. **Docker needs the same cron, on the host** - Docker has no scheduler of its own; a host
+>    crontab entry runs `docker compose run --rm dashboard ...` the same way a local one runs
+>    `uv run ...` directly. Confirmed, not assumed - see the live verification below.
+> 4. **No hidden hosted/cloud component** - worth stating plainly since it's a natural question:
+>    `coordinator.py`/`companies.py` are just scripts that call the Anthropic API from wherever
+>    they're invoked. Whatever machine (or Docker container) cron lives on has to actually be
+>    running at the scheduled time - a missed tick is skipped, not queued, same as any plain cron
+>    job.
+> 5. **Notification method: log to a file, not email/webhook** - also explicitly decided rather
+>    than assumed, after presenting the tradeoff (email/webhook need real new setup - SMTP
+>    credentials or a third-party service - for a personal tool that already writes everything
+>    meaningful to `events`/`cost_log`, readable via the dashboard's History page or a plain log
+>    file). Nothing to build for this beyond documenting the redirect - `coordinator.py`/
+>    `companies.py` already print a clear per-run summary and already exit non-zero with a clear
+>    message on a real failure (e.g. a missing `.env`), which is what actually makes a log file
+>    useful for cron.
+>
+> `docs/crontab.example` has the real, tested crontab lines for both local (`uv`) and Docker setups
+> - jobs daily, companies weekly, matching decision #1. Two real gotchas it documents, both
+> verified rather than assumed: cron's stripped-down environment needs `uv`'s *explicit* path
+> (`which uv` - on this project's own dev machine, that's a snap-installed `/snap/bin/uv`, easy to
+> get wrong if you assume whatever an interactive shell resolves), and an explicit `cd` into the
+> project directory first (so `.env`/`data`/`profile` all resolve the same way they do when run by
+> hand) - cron gives you neither a login shell nor your normal `$PATH`/`$PWD`.
+>
+> **Verified live**: simulated cron's actual minimal environment (`env -i` with a stripped `PATH`,
+> no shell profile) rather than just trusting the documented commands would work under real cron -
+> confirmed the exact invocation pattern (`cd` + explicit `uv` path + `>>` redirect) fetches real
+> data and exits 0. Separately confirmed the failure path a broken schedule would actually hit: ran
+> the same pattern from a directory with no `.env` at all, got a clear one-line message
+> ("ANTHROPIC_API_KEY is not set...") and exit code 1 - exactly what makes a misconfigured cron job
+> visible in a log file rather than silently doing nothing. No code changes were needed for either
+> of these - `claude_client.require_api_key()`'s existing `sys.exit()` behavior (Phase 0) already
+> does the right thing; this phase's job was confirming that, not building new error handling.
+
+- [x] Wire the coordinator to run on a schedule (cron or similar) with the spend guard from
       Phase 12 protecting unattended runs
-- [ ] Decide what a scheduled run should do differently when nobody's watching the dashboard live
+- [x] Decide what a scheduled run should do differently when nobody's watching the dashboard live
       (e.g. an email/notification summary pointing back to it)

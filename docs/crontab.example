@@ -1,0 +1,42 @@
+# Example crontab entries for job-search-agent (Phase 17).
+#
+# This project has no scheduler of its own - the coordinator/companies pipelines are plain CLI
+# scripts, and MAX_LISTINGS_PER_RUN/MAX_SPEND_PER_RUN_USD (Phase 12) already exist specifically to
+# protect unattended runs like these. Ordinary OS cron is the whole mechanism; nothing in the
+# dashboard drives or needs to know about this.
+#
+# Jobs and companies are scheduled independently and at different frequencies on purpose - new
+# companies worth watching turn up far less often than new job postings (see companies.py).
+#
+# Install with: crontab -e, then paste the lines below (edited for your own paths).
+#
+# Cron runs with a minimal environment - no login shell, a stripped-down PATH, and the wrong
+# working directory unless you set both explicitly. Two things every line below does for that
+# reason: `cd` into the project directory first (so .env/data/profile all resolve correctly, the
+# same way they do when you run these commands by hand), and use `uv`'s full path rather than
+# assuming it's on cron's PATH - find yours with `which uv` (a common gotcha: this is often
+# different from what an interactive shell reports, e.g. an asdf/mise shim or, as on this
+# project's own dev machine, a snap-installed uv at /snap/bin/uv).
+#
+# Redirecting output to a log file is deliberate, not optional: cron silently drops output (or
+# tries to email it locally, which is rarely checked) unless you redirect it. `mkdir -p logs`
+# once in the project directory first - cron's redirection creates the file but not the directory.
+
+# --- Local (uv) setup ---
+# Jobs: every day at 06:00
+0 6 * * * cd /path/to/job-search-agent && /snap/bin/uv run python -m job_search_agent.coordinator >> logs/coordinator.log 2>&1
+# Companies: once a week, Sunday at 06:30
+30 6 * * 0 cd /path/to/job-search-agent && /snap/bin/uv run python -m job_search_agent.companies >> logs/companies.log 2>&1
+
+# --- Docker setup ---
+# Same idea, but the command is a one-off `docker compose run` against the already-built image -
+# cron here runs on the HOST, not inside a container (Docker has no scheduler of its own either).
+# Run from the directory containing docker-compose.yml, same reasoning as above.
+0 6 * * * cd /path/to/job-search-agent && docker compose run --rm dashboard uv run python -m job_search_agent.coordinator >> logs/coordinator.log 2>&1
+30 6 * * 0 cd /path/to/job-search-agent && docker compose run --rm dashboard uv run python -m job_search_agent.companies >> logs/companies.log 2>&1
+
+# Checking it worked: tail -f logs/coordinator.log, or the dashboard's /history page (reads the
+# same events/cost_log tables either way - the log file is just this run's console output).
+#
+# If your machine/container isn't on at 06:00, that run is simply skipped, not queued for later -
+# plain cron doesn't catch up missed runs (a tool like `anacron` does, if that matters to you).

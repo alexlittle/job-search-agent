@@ -21,7 +21,7 @@ independent pipeline - see [Company discovery](#company-discovery-separate-pipel
 
 Cheap/fast models (Haiku) do the bulk first-pass filtering; the pricier model (Sonnet) only ever
 sees what already survived the cheaper filters and the rule-based pre-filter. See `CLAUDE.md` and
-`tasks.md` for the full design rationale and phase-by-phase build history.
+`docs/tasks.md` for the full design rationale and phase-by-phase build history.
 
 ## Setup
 
@@ -76,8 +76,10 @@ uv run python -m job_search_agent.coordinator --no-web-search   # skip the paid 
 uv run python -m job_search_agent.coordinator "data scientist"  # override the RSS search term
 ```
 
-There's no scheduler built in yet (see `tasks.md` Phase 17) - run it by hand, or wire it into cron
-yourself for now.
+There's no scheduler built into the app itself - the commands above are plain CLI scripts, and
+`MAX_LISTINGS_PER_RUN`/`MAX_SPEND_PER_RUN_USD` (see [Cost controls](#cost-controls)) already exist
+specifically to protect unattended runs. See [Scheduling](#scheduling) below for running this
+automatically via cron.
 
 ## Adding a job source
 
@@ -126,8 +128,27 @@ uv run python -m job_search_agent.companies
 ```
 
 New companies worth watching turn up far less often than new job postings, so this is meant to run
-on its own, much less frequent schedule. Results show up on the dashboard's Companies page, with
-their own 3-way feedback (relevant / not relevant / already known).
+on its own, much less frequent schedule (see [Scheduling](#scheduling) below). Results show up on
+the dashboard's Companies page, with their own 3-way feedback (relevant / not relevant / already
+known).
+
+## Scheduling
+
+Both pipelines are meant to run unattended on their own schedules (jobs more often, companies much
+less so) via ordinary OS cron - there's no scheduler inside the app, and nothing in the dashboard
+drives this (a deliberate choice: the onboarding wizard's "how often do you plan to run this?"
+step only stores your answer for your own reference, it doesn't act on it).
+
+See `docs/crontab.example` for real, tested crontab lines for both the local (`uv`) and Docker
+setups, including the two gotchas that actually bite here: cron's minimal environment needs an
+explicit path to `uv` (`which uv` - it may not be what an interactive shell reports) and an
+explicit `cd` into the project directory, and cron discards output unless you redirect it
+yourself. A missing/misconfigured `.env` fails loudly (clear message, non-zero exit) rather than
+hanging or silently doing nothing, so a broken schedule shows up in the log file.
+
+If the machine (or Docker container) isn't running at the scheduled time, that run is simply
+skipped, not queued for later - there's no cloud/hosted component here, everything runs wherever
+you point cron at it.
 
 ## License
 

@@ -1,11 +1,11 @@
 """Finds job listings via Claude's web search tool - broader coverage than any single feed/API,
 catching postings on ATS platforms, company career pages, or niche boards not otherwise
-configured. This is the source agent from tasks.md Phase 3, added specifically because a curated
+configured. This is the source agent from docs/tasks.md Phase 3, added specifically because a curated
 feed/API list will always miss things.
 
 Unlike the plain-Python RSS sources, this makes real LLM calls (with web search) and costs real
 money per query - a single role search here runs several times the cost of fetching an entire RSS
-feed. Run it more sparingly than the free sources; see tasks.md Phase 12 for cost controls still
+feed. Run it more sparingly than the free sources; see docs/tasks.md Phase 12 for cost controls still
 to come (this module has no spend guard yet).
 
 Run with: uv run python -m job_search_agent.sources.web_search [role]

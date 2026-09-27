@@ -2,7 +2,7 @@
 (see listing.py). A company lead is "worth following, might be worth a speculative application",
 not "here's a role to apply for" - different judgement, different fields (no title/posted_date; a
 sector/stage instead, and why_relevant explains fit against the candidate generally rather than
-against one specific posting). See tasks.md Phase 15.
+against one specific posting). See docs/tasks.md Phase 15.
 """
 
 from dataclasses import dataclass
