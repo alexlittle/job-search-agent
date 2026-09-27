@@ -1,12 +1,13 @@
-"""Results, system-excluded, user-rejected, and hidden pages, all built from the same
-listing-fetch helper so a listing's feedback controls work identically everywhere.
+"""Results, your picks, system-excluded, user-rejected, and hidden pages, all built from the
+same listing-fetch helper so a listing's feedback controls work identically everywhere.
 
-Every listing falls into exactly one of five buckets - hidden first, then feedback, then system
+Every listing falls into exactly one of six buckets - hidden first, then feedback, then system
 status:
 - hidden_at is set                                         -> hidden, always, regardless of anything
 - feedback = 'not_relevant'                                 -> rejected
-- feedback = 'relevant'                                     -> main
-- feedback is unset AND status is strong/possible           -> main (the system's own picks)
+- feedback = 'relevant'                                     -> picks (everything you've marked relevant,
+                                                                 regardless of what the system thought)
+- feedback is unset AND status is strong/possible           -> main (the system's own new picks)
 - feedback is unset AND status is filtered/haiku_no/weak    -> excluded (the system's own rejects)
 - feedback is unset AND status is anything earlier in the pipeline -> pending (not scored yet)
 
@@ -14,6 +15,10 @@ The WHERE-clause constants below are the single source of truth for this partiti
 pages and the homepage stats are built from them, so the two can't silently drift apart (they
 did once already: an earlier version counted "excluded" without excluding what had also been
 rejected, so the two numbers double-counted the overlap and didn't sum to the total).
+
+`/` used to also show everything marked relevant, under a "Your picks" fallback section at the
+bottom - moved to its own `/picks` page so the homepage stays just "new system matches to
+review" and your own picks live in one place regardless of the status they happened to carry.
 """
 
 import json
@@ -40,10 +45,9 @@ _EXCLUDED_STATUS_LABELS = {
 
 HIDDEN_WHERE = "hidden_at IS NOT NULL"
 MAIN_WHERE = (
-    "hidden_at IS NULL AND ("
-    "feedback = 'relevant' OR (feedback IS NULL AND status IN ('sonnet_strong', 'sonnet_possible'))"
-    ")"
+    "hidden_at IS NULL AND feedback IS NULL AND status IN ('sonnet_strong', 'sonnet_possible')"
 )
+PICKS_WHERE = "hidden_at IS NULL AND feedback = 'relevant'"
 EXCLUDED_WHERE = (
     "hidden_at IS NULL AND feedback IS NULL "
     "AND status IN ('sonnet_weak', 'haiku_no', 'filtered')"
@@ -123,13 +127,14 @@ def _redirect_with_saved(next_url: str | None, item_id: int, default_endpoint: s
 def index():
     with db.connect() as conn:
         listings = _fetch(conn, MAIN_WHERE)
-        groups = _group(listings, _MAIN_STATUS_LABELS, fallback_label="Your picks (marked relevant)")
+        groups = _group(listings, _MAIN_STATUS_LABELS)
         for group in groups.values():
             group.sort(key=lambda l: l.get("score", 0), reverse=True)
 
         stats = {
             "total": conn.execute("SELECT COUNT(*) FROM listings").fetchone()[0],
             "shown": len(listings),
+            "picks": _count(conn, PICKS_WHERE),
             "excluded": _count(conn, EXCLUDED_WHERE),
             "rejected": _count(conn, REJECTED_WHERE),
             "hidden": _count(conn, HIDDEN_WHERE),
@@ -138,6 +143,19 @@ def index():
 
     return render_template(
         "results.html", groups=groups, stats=stats, saved_id=request.args.get("saved", type=int)
+    )
+
+
+@results_bp.route("/picks")
+def picks():
+    with db.connect() as conn:
+        listings = _fetch(conn, PICKS_WHERE)
+        groups = _group(listings, _MAIN_STATUS_LABELS, fallback_label="Other picks")
+        for group in groups.values():
+            group.sort(key=lambda l: l.get("score", 0), reverse=True)
+
+    return render_template(
+        "picks.html", groups=groups, saved_id=request.args.get("saved", type=int)
     )
 
 

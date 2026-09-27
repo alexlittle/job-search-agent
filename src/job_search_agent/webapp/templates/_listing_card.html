@@ -3,7 +3,10 @@
   <div class="listing-header">
     <div>
       <h3><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a></h3>
-      <div class="meta">{{ l.company }} &middot; {{ l.location }} &middot; source: {{ l.source }}</div>
+      <div class="meta">
+        {{ l.company }} &middot; {{ l.location }} &middot; source: {{ l.source }}
+        &middot; added {{ l.first_seen[:10] }}
+      </div>
     </div>
     {% include "_hide_button.html" %}
   </div>

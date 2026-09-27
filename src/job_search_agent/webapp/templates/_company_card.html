@@ -3,7 +3,10 @@
   <div class="listing-header">
     <div>
       <h3><a href="{{ c.careers_url }}" target="_blank" rel="noopener">{{ c.name }}</a></h3>
-      <div class="meta">{{ c.sector }} &middot; {{ c.stage }} &middot; source: {{ c.source }}</div>
+      <div class="meta">
+        {{ c.sector }} &middot; {{ c.stage }} &middot; source: {{ c.source }}
+        &middot; added {{ c.first_seen[:10] }}
+      </div>
     </div>
   </div>
   <p>{{ c.why_relevant }}</p>

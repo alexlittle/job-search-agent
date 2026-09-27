@@ -16,6 +16,7 @@
       <a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.title }}</a>
       <span class="col-company">{{ l.company }}</span>
       <span class="col-location">{{ l.location }}</span>
+      <span class="col-date">{{ l.first_seen[:10] }}</span>
       {% if status_labels %}<span class="col-tag">{{ status_labels.get(l.status, l.status) }}</span>{% endif %}
       {% if l.score is defined %}<span class="col-score">{{ l.score }}</span>{% endif %}
       {% include "_hide_button.html" %}
