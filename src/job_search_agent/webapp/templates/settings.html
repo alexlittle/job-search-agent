@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Settings - Job Search Agent{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<p class="stats">Edits here are saved straight to .env, the same file the wizard and every script read.</p>
+{% if saved %}<p style="color:#2a8a4a; font-weight:600;">Saved.</p>{% endif %}
+
+<form method="post">
+  <p>
+    <label>Anthropic API key<br>
+      <input type="password" name="ANTHROPIC_API_KEY" value="{{ values.ANTHROPIC_API_KEY }}" required>
+    </label>
+  </p>
+  <p>
+    <label>Contact email<br>
+      <input type="email" name="CONTACT_EMAIL" value="{{ values.CONTACT_EMAIL }}" required>
+    </label>
+    <span class="hint">Sent as contact info when fetching external job sites/APIs.</span>
+  </p>
+
+  <h2>Adzuna (optional)</h2>
+  <p>
+    <label>Adzuna app ID<br>
+      <input type="text" name="ADZUNA_APP_ID" value="{{ values.ADZUNA_APP_ID }}">
+    </label>
+  </p>
+  <p>
+    <label>Adzuna app key<br>
+      <input type="password" name="ADZUNA_APP_KEY" value="{{ values.ADZUNA_APP_KEY }}">
+    </label>
+    <span class="hint">
+      From <a href="https://developer.adzuna.com/" target="_blank" rel="noopener">developer.adzuna.com</a>.
+      Left blank, the Adzuna source is skipped rather than the pipeline failing.
+    </span>
+  </p>
+  <p>
+    <label>Adzuna country code<br>
+      <input type="text" name="ADZUNA_COUNTRY" value="{{ values.ADZUNA_COUNTRY }}" size="4">
+    </label>
+    <span class="hint">Two-letter code (gb/us/de/fr/au/...). Defaults to gb.</span>
+  </p>
+
+  <h2>Cost controls (optional)</h2>
+  <p>
+    <label>Max listings per run<br>
+      <input type="number" name="MAX_LISTINGS_PER_RUN" value="{{ values.MAX_LISTINGS_PER_RUN }}" min="1" step="1">
+    </label>
+    <span class="hint">Caps how many listings a single Haiku/Sonnet batch takes on; the rest wait for next run.</span>
+  </p>
+  <p>
+    <label>Max spend per run (USD)<br>
+      <input type="number" name="MAX_SPEND_PER_RUN_USD" value="{{ values.MAX_SPEND_PER_RUN_USD }}" min="0" step="0.01">
+    </label>
+    <span class="hint">
+      A pre-flight worst-case estimate above which a batch is refused rather than submitted -
+      underneath whatever spend cap you've set directly on your Anthropic Console account.
+    </span>
+  </p>
+
+  <h2>Sources</h2>
+  <p class="hint">
+    Turn individual job sources on or off. New sources (a feed added to config/sources.yaml, or a
+    new module under sources/) show up here automatically, on by default.
+  </p>
+  {% for source in sources %}
+    <label class="source-row">
+      <input type="checkbox" name="{{ source.id }}" {% if source.enabled %}checked{% endif %}>
+      {{ source.label }}
+      <span class="hint" style="display:inline;">({{ source.kind }})</span>
+    </label>
+  {% endfor %}
+  {% if not sources %}<p class="empty">No sources found.</p>{% endif %}
+
+  <button type="submit">Save</button>
+</form>
+{% endblock %}

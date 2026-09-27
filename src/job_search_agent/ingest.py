@@ -11,25 +11,36 @@ import asyncio
 import sqlite3
 import sys
 
-from job_search_agent import db, profile
+from job_search_agent import db, profile, source_registry
 from job_search_agent.sources import adzuna, generic_rss, web_search
 
 
 def ingest_rss(conn: sqlite3.Connection, keywords: str) -> None:
-    listings = generic_rss.fetch_all(keywords=keywords)
+    disabled = source_registry.get_disabled(conn)
+    feed_configs = generic_rss.load_feed_configs()
+    skipped = [f["name"] for f in feed_configs if f"rss:{f['name']}" in disabled]
+    listings = []
+    for feed_config in feed_configs:
+        if f"rss:{feed_config['name']}" in disabled:
+            continue
+        listings.extend(generic_rss.fetch_feed(feed_config, keywords=keywords))
     inserted = db.save_listings(conn, listings)
-    db.log_event(
-        conn,
-        stage="fetch:rss",
-        message=(
-            f"Fetched {len(listings)} listing(s) from RSS feeds ({inserted} new) "
-            f"for keywords={keywords!r}"
-        ),
+    message = (
+        f"Fetched {len(listings)} listing(s) from RSS feeds ({inserted} new) "
+        f"for keywords={keywords!r}"
     )
-    print(f"RSS: {len(listings)} fetched, {inserted} new.")
+    if skipped:
+        message += f"; skipped disabled feed(s): {', '.join(skipped)}"
+    db.log_event(conn, stage="fetch:rss", message=message)
+    print(f"RSS: {len(listings)} fetched, {inserted} new." + (f" (disabled: {', '.join(skipped)})" if skipped else ""))
 
 
 def ingest_adzuna(conn: sqlite3.Connection, role: str | None = None) -> None:
+    if not source_registry.is_enabled(conn, "source:adzuna"):
+        db.log_event(conn, stage="fetch:adzuna", message="Skipped - disabled in Settings")
+        print("Adzuna: skipped (disabled in Settings).")
+        return
+
     if not adzuna.have_credentials():
         db.log_event(
             conn,
@@ -50,6 +61,11 @@ def ingest_adzuna(conn: sqlite3.Connection, role: str | None = None) -> None:
 
 
 async def ingest_web_search(conn: sqlite3.Connection, role: str | None) -> None:
+    if not source_registry.is_enabled(conn, "source:web_search"):
+        db.log_event(conn, stage="fetch:web_search", message="Skipped - disabled in Settings")
+        print("Web search: skipped (disabled in Settings).")
+        return
+
     listings, costs = await web_search.search_all(role)
     inserted = db.save_listings(conn, listings)
     db.log_event(

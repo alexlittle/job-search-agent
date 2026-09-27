@@ -15,12 +15,14 @@ def create_app() -> Flask:
     from job_search_agent.webapp.history import history_bp
     from job_search_agent.webapp.onboarding import next_incomplete_step, onboarding_bp
     from job_search_agent.webapp.results import results_bp
+    from job_search_agent.webapp.settings import settings_bp
 
     app.register_blueprint(results_bp)
     app.register_blueprint(companies_bp)
     app.register_blueprint(criteria_bp)
     app.register_blueprint(history_bp)
     app.register_blueprint(onboarding_bp)
+    app.register_blueprint(settings_bp)
 
     @app.before_request
     def redirect_to_onboarding_if_incomplete():

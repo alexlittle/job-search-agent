@@ -12,7 +12,7 @@ Run with: uv run python -m job_search_agent.companies
 
 import asyncio
 
-from job_search_agent import db
+from job_search_agent import db, source_registry
 from job_search_agent.profile import company_feedback_examples_context
 from job_search_agent.sources.company_discovery import discover_companies
 
@@ -21,6 +21,10 @@ STAGE = "discover:companies"
 
 async def run_company_discovery() -> None:
     with db.connect() as conn:
+        if not source_registry.is_enabled(conn, "source:company_discovery"):
+            db.log_event(conn, stage=STAGE, message="Skipped - disabled in Settings")
+            print("Company discovery: skipped (disabled in Settings).")
+            return
         feedback_context = company_feedback_examples_context(conn)
 
     leads, cost = await discover_companies(feedback_context)
