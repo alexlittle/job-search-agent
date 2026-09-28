@@ -11,9 +11,13 @@ from importlib.metadata import version
 
 from dotenv import load_dotenv
 
+from job_search_agent.env_utils import ENV_PATH
+
 
 def build_user_agent() -> str:
-    load_dotenv()
+    # Explicit path - see claude_client.require_api_key for why bare load_dotenv() isn't safe
+    # under every deployment (mod_wsgi in particular).
+    load_dotenv(ENV_PATH)
     contact_email = os.environ.get("CONTACT_EMAIL")
     if not contact_email:
         sys.exit(

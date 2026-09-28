@@ -12,7 +12,7 @@ from flask import Blueprint, redirect, render_template, request, url_for
 
 from job_search_agent import db
 from job_search_agent.cv_import import convert_to_markdown
-from job_search_agent.env_utils import set_env_var
+from job_search_agent.env_utils import ENV_PATH, set_env_var
 from job_search_agent.profile import DEFAULT_PROFILE_DIR, Criteria, load_criteria
 from job_search_agent.webapp.criteria import criteria_dict_from_form
 
@@ -26,7 +26,9 @@ def has_env_configured() -> bool:
 
     from dotenv import load_dotenv
 
-    load_dotenv()
+    # Explicit path - see claude_client.require_api_key for why bare load_dotenv() isn't safe
+    # under every deployment (mod_wsgi in particular).
+    load_dotenv(ENV_PATH)
     return bool(os.environ.get("ANTHROPIC_API_KEY")) and bool(os.environ.get("CONTACT_EMAIL"))
 
 

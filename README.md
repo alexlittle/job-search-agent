@@ -150,6 +150,19 @@ If the machine (or Docker container) isn't running at the scheduled time, that r
 skipped, not queued for later - there's no cloud/hosted component here, everything runs wherever
 you point cron at it.
 
+## Running the dashboard as a service
+
+`uv run python -m job_search_agent.webapp` is Flask's dev server - fine for interactive use, but
+it doesn't survive a reboot or crash on its own. `wsgi.py` (repo root) exposes the same app as a
+WSGI `application` object for a real WSGI server (mod_wsgi, gunicorn, etc.) to host instead.
+
+See `docs/apache-vhost.example.conf` for a real Apache/mod_wsgi vhost, including two gotchas
+worth reading before you set this up: `load_dotenv()`'s default `.env`-finding logic silently
+breaks under mod_wsgi (already fixed in this codebase - every call site passes `env_utils.
+ENV_PATH` explicitly instead, but worth knowing if you add a new one), and Apache can only load
+one `mod_wsgi` module process-wide if you're hosting multiple Python-version-mismatched sites
+under the same Apache instance.
+
 ## License
 
 GPL-3.0 - see `LICENSE`.

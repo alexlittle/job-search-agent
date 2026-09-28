@@ -19,6 +19,15 @@ Run with: uv run python -m job_search_agent.coordinator [keywords-for-rss] [--no
 (omit keywords to default to the candidate's own first target role from criteria; web search runs
 once per role in the criteria and costs real money each time, so it's easy to skip for a
 quick/free RSS-only run)
+
+No stage here swallows an error - a network drop (this runs unattended via cron, often on a
+laptop that sleeps/travels) still crashes the run with a full traceback and non-zero exit, so
+cron's own log file keeps the real diagnostic detail. What's added here is a clean one-line
+"failed during <stage>" event in the `events` table (visible on the dashboard's History page)
+logged *before* that crash propagates, so knowing something broke - and roughly where - doesn't
+require digging through a log file first. Whatever already ran before the failing stage is
+already committed to the DB either way (nothing here is transactional across stages), so a
+crash never rolls back or duplicates earlier progress in the same run.
 """
 
 import asyncio
@@ -45,29 +54,45 @@ async def run_pipeline(keywords: str | None = None, include_web_search: bool = T
     started_at = datetime.now(UTC).isoformat()
     _log(f"Pipeline run started (keywords={keywords!r}, web_search={include_web_search})")
 
-    print("== Fetching listings ==")
-    with db.connect() as conn:
-        ingest_rss(conn, keywords=keywords)
-        ingest_adzuna(conn, role=None)
-        if include_web_search:
-            await ingest_web_search(conn, role=None)
-    _log("Finished fetching listings")
+    stage = "startup"
+    try:
+        stage = "fetching listings"
+        print("== Fetching listings ==")
+        with db.connect() as conn:
+            ingest_rss(conn, keywords=keywords)
+            ingest_adzuna(conn, role=None)
+            if include_web_search:
+                await ingest_web_search(conn, role=None)
+        _log("Finished fetching listings")
 
-    print("\n== Pre-filtering ==")
-    run_filters()
-    _log("Finished pre-filter")
+        stage = "pre-filtering"
+        print("\n== Pre-filtering ==")
+        run_filters()
+        _log("Finished pre-filter")
 
-    print("\n== Haiku coarse pass ==")
-    await run_haiku_pass()
-    _log("Finished Haiku pass")
+        stage = "Haiku coarse pass"
+        print("\n== Haiku coarse pass ==")
+        await run_haiku_pass()
+        _log("Finished Haiku pass")
 
-    print("\n== Sonnet detailed pass ==")
-    await run_sonnet_pass()
-    _log("Finished Sonnet pass")
+        stage = "Sonnet detailed pass"
+        print("\n== Sonnet detailed pass ==")
+        await run_sonnet_pass()
+        _log("Finished Sonnet pass")
 
-    print("\n== Retrying uncertain verdicts ==")
-    await run_retry_pass()
-    _log("Finished retry pass")
+        stage = "retrying uncertain verdicts"
+        print("\n== Retrying uncertain verdicts ==")
+        await run_retry_pass()
+        _log("Finished retry pass")
+    except Exception as exc:
+        _log(f"Pipeline run FAILED during {stage}: {exc}")
+        print(f"\n[error] Pipeline run failed during {stage}: {exc}", file=sys.stderr)
+        print(
+            "Whatever completed before this is already saved - check the dashboard's History "
+            "page. Full traceback follows for the log file:",
+            file=sys.stderr,
+        )
+        raise
 
     with db.connect() as conn:
         total_cost = conn.execute(

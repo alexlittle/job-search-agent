@@ -11,6 +11,7 @@ Run with: uv run python -m job_search_agent.companies
 """
 
 import asyncio
+import sys
 
 from job_search_agent import db, source_registry
 from job_search_agent.profile import company_feedback_examples_context
@@ -27,7 +28,14 @@ async def run_company_discovery() -> None:
             return
         feedback_context = company_feedback_examples_context(conn)
 
-    leads, cost = await discover_companies(feedback_context)
+    try:
+        leads, cost = await discover_companies(feedback_context)
+    except Exception as exc:
+        with db.connect() as conn:
+            db.log_event(conn, stage=STAGE, message=f"Run FAILED: {exc}")
+        print(f"\n[error] Company discovery failed: {exc}", file=sys.stderr)
+        print("Full traceback follows for the log file:", file=sys.stderr)
+        raise
 
     with db.connect() as conn:
         inserted = db.save_company_leads(conn, leads)

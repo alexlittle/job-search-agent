@@ -8,17 +8,20 @@ import os
 
 from dotenv import load_dotenv
 
+from job_search_agent.env_utils import ENV_PATH
 from job_search_agent.pricing import estimate_cost_usd, estimate_tokens
 
 
 def _int_env(name: str, default: int) -> int:
-    load_dotenv()
+    # Explicit path - see claude_client.require_api_key for why bare load_dotenv() isn't safe
+    # under every deployment (mod_wsgi in particular).
+    load_dotenv(ENV_PATH)
     value = os.environ.get(name)
     return int(value) if value else default
 
 
 def _float_env(name: str, default: float) -> float:
-    load_dotenv()
+    load_dotenv(ENV_PATH)
     value = os.environ.get(name)
     return float(value) if value else default
 

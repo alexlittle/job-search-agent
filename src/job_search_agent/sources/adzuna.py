@@ -24,6 +24,7 @@ import sys
 import requests
 from dotenv import load_dotenv
 
+from job_search_agent.env_utils import ENV_PATH
 from job_search_agent.listing import Listing
 from job_search_agent.profile import load_criteria
 from job_search_agent.user_agent import build_user_agent
@@ -37,17 +38,19 @@ def default_country() -> str:
     """Adzuna's country code (see their docs for the full list, e.g. gb/us/de/fr/au/...).
     .env-configurable (Phase 16) rather than a hardcoded constant - this was a UK-specific default
     of the original author's, not something reusable as-is for a user elsewhere."""
-    load_dotenv()
+    load_dotenv(ENV_PATH)
     return os.environ.get("ADZUNA_COUNTRY", "gb").lower()
 
 
 def have_credentials() -> bool:
-    load_dotenv()
+    # Explicit path - see claude_client.require_api_key for why bare load_dotenv() isn't safe
+    # under every deployment (mod_wsgi in particular).
+    load_dotenv(ENV_PATH)
     return bool(os.environ.get("ADZUNA_APP_ID")) and bool(os.environ.get("ADZUNA_APP_KEY"))
 
 
 def require_credentials() -> tuple[str, str]:
-    load_dotenv()
+    load_dotenv(ENV_PATH)
     app_id = os.environ.get("ADZUNA_APP_ID")
     app_key = os.environ.get("ADZUNA_APP_KEY")
     if not app_id or not app_key:

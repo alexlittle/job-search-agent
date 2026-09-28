@@ -18,13 +18,14 @@ import json
 import sqlite3
 
 from job_search_agent import db, limits
-from job_search_agent.fit.batch_client import BatchResult, run_batch
+from job_search_agent.fit.batch_client import BatchResult, run_or_resume_batch
 from job_search_agent.profile import Profile, feedback_examples_context, load_profile
 from job_search_agent.pricing import estimate_cost_usd
 
 MODEL = "claude-haiku-4-5-20251001"
 STAGE = "haiku"
 MAX_OUTPUT_TOKENS = 300
+PENDING_BATCH_KEY = "pending_batch:haiku"
 
 VERDICT_SCHEMA = {
     "type": "json_schema",
@@ -99,18 +100,22 @@ async def run_haiku_pass() -> None:
 
     with db.connect() as conn:
         feedback_context = feedback_examples_context(conn)
-        rows = conn.execute("SELECT * FROM listings WHERE status = 'pending_fit'").fetchall()
-        if not rows:
-            print("No listings pending a Haiku pass.")
+
+        def _prepare() -> tuple[list[sqlite3.Row], list[dict]] | None:
+            rows = conn.execute("SELECT * FROM listings WHERE status = 'pending_fit'").fetchall()
+            if not rows:
+                print("No listings pending a Haiku pass.")
+                return None
+            rows = limits.cap_listings(rows, stage=STAGE)
+            system_text = build_system_prompt(profile, feedback_context)
+            user_texts = [build_user_message(row) for row in rows]
+            limits.check_spend_cap(MODEL, system_text, user_texts, MAX_OUTPUT_TOKENS)
+            return rows, [_batch_request(row, system_text) for row in rows]
+
+        outcome = await run_or_resume_batch(conn, PENDING_BATCH_KEY, _prepare)
+        if outcome is None:
             return
-        rows = limits.cap_listings(rows, stage=STAGE)
-
-        system_text = build_system_prompt(profile, feedback_context)
-        user_texts = [build_user_message(row) for row in rows]
-        limits.check_spend_cap(MODEL, system_text, user_texts, MAX_OUTPUT_TOKENS)
-
-        requests = [_batch_request(row, system_text) for row in rows]
-        results = await run_batch(requests)
+        rows, results = outcome.rows, outcome.results
 
         for row in rows:
             result = results.get(f"listing-{row['id']}")

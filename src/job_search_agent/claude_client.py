@@ -13,9 +13,14 @@ from typing import TypeVar
 from claude_agent_sdk import ClaudeSDKError
 from dotenv import load_dotenv
 
+from job_search_agent.env_utils import ENV_PATH
+
 
 def require_api_key() -> str:
-    load_dotenv()
+    # Explicit path, not bare load_dotenv() - its cwd/frame-based auto-discovery breaks under
+    # mod_wsgi (see docs/apache-vhost.example.conf), where __main__ has no __file__ so
+    # python-dotenv silently falls back to os.getcwd() instead of finding the real .env.
+    load_dotenv(ENV_PATH)
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         sys.exit("ANTHROPIC_API_KEY is not set. Copy .env.example to .env and fill in your key.")

@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from flask import Blueprint, redirect, render_template, request, url_for
 
 from job_search_agent import db, source_registry
-from job_search_agent.env_utils import set_env_var
+from job_search_agent.env_utils import ENV_PATH, set_env_var
 
 settings_bp = Blueprint("settings", __name__)
 
@@ -41,7 +41,9 @@ ALL_KEYS = _REQUIRED_KEYS + [key for key, _default in _OPTIONAL_KEYS]
 
 
 def _current_values() -> dict[str, str]:
-    load_dotenv()
+    # Explicit path - see claude_client.require_api_key for why bare load_dotenv() isn't safe
+    # under every deployment (mod_wsgi in particular).
+    load_dotenv(ENV_PATH)
     values = {key: os.environ.get(key, "") for key in _REQUIRED_KEYS}
     for key, default in _OPTIONAL_KEYS:
         values[key] = os.environ.get(key) or default

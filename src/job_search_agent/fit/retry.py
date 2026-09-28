@@ -37,11 +37,12 @@ from bs4 import BeautifulSoup
 
 from job_search_agent import db, limits
 from job_search_agent.fit import sonnet
-from job_search_agent.fit.batch_client import run_batch
+from job_search_agent.fit.batch_client import run_or_resume_batch
 from job_search_agent.profile import feedback_examples_context, load_profile
 from job_search_agent.user_agent import build_user_agent
 
 STAGE = "sonnet_retry"
+PENDING_BATCH_KEY = "pending_batch:sonnet_retry"
 FETCH_TIMEOUT_SECONDS = 15
 # Generous enough to capture a real job description, bounded so one huge page can't blow out the
 # prompt (or the retry's cost) - see the module docstring on why this whole pass needs its own
@@ -115,46 +116,55 @@ async def run_retry_pass() -> None:
 
     with db.connect() as conn:
         feedback_context = feedback_examples_context(conn)
-        rows = conn.execute(
-            """
-            SELECT listings.*, verdicts.detail_json AS sonnet_detail_json
-            FROM listings
-            JOIN verdicts ON verdicts.listing_id = listings.id AND verdicts.stage = 'sonnet'
-            WHERE listings.status = 'sonnet_uncertain'
-            """
-        ).fetchall()
-        if not rows:
-            print("No uncertain listings pending retry.")
-            return
-        rows = limits.cap_listings(rows, stage=STAGE)
 
-        page_texts = {row["id"]: fetch_full_description(row["url"]) for row in rows}
-        to_retry = [row for row in rows if page_texts[row["id"]]]
-        unfetchable = [row for row in rows if not page_texts[row["id"]]]
+        def _prepare() -> tuple[list[sqlite3.Row], list[dict]] | None:
+            nonlocal unreachable
+            rows = conn.execute(
+                """
+                SELECT listings.*, verdicts.detail_json AS sonnet_detail_json
+                FROM listings
+                JOIN verdicts ON verdicts.listing_id = listings.id AND verdicts.stage = 'sonnet'
+                WHERE listings.status = 'sonnet_uncertain'
+                """
+            ).fetchall()
+            if not rows:
+                print("No uncertain listings pending retry.")
+                return None
+            rows = limits.cap_listings(rows, stage=STAGE)
 
-        for row in unfetchable:
-            _finalize_unfetchable(conn, row)
-            unreachable += 1
-            print(f"[unresolved] {row['title'][:55]} - couldn't fetch {row['url']}")
+            page_texts = {row["id"]: fetch_full_description(row["url"]) for row in rows}
+            to_retry = [row for row in rows if page_texts[row["id"]]]
+            unfetchable = [row for row in rows if not page_texts[row["id"]]]
 
-        if not to_retry:
+            for row in unfetchable:
+                _finalize_unfetchable(conn, row)
+                unreachable += 1
+                print(f"[unresolved] {row['title'][:55]} - couldn't fetch {row['url']}")
+
+            if not to_retry:
+                return None
+
+            system_text = sonnet.build_system_prompt(profile, feedback_context)
+            user_messages = {
+                row["id"]: build_retry_message(row, page_texts[row["id"]]) for row in to_retry
+            }
+            limits.check_spend_cap(
+                sonnet.MODEL, system_text, list(user_messages.values()), sonnet.MAX_OUTPUT_TOKENS
+            )
+            requests_payload = [
+                sonnet._batch_request(row, system_text, user_message=user_messages[row["id"]])
+                for row in to_retry
+            ]
+            return to_retry, requests_payload
+
+        outcome = await run_or_resume_batch(conn, PENDING_BATCH_KEY, _prepare)
+        if outcome is None:
             print(
                 f"\nRetry pass: {unreachable} listing(s) stayed uncertain (page unreachable), "
-                "0 re-scored."
+                "0 re-scored this run."
             )
             return
-
-        system_text = sonnet.build_system_prompt(profile, feedback_context)
-        user_messages = {row["id"]: build_retry_message(row, page_texts[row["id"]]) for row in to_retry}
-        limits.check_spend_cap(
-            sonnet.MODEL, system_text, list(user_messages.values()), sonnet.MAX_OUTPUT_TOKENS
-        )
-
-        requests_payload = [
-            sonnet._batch_request(row, system_text, user_message=user_messages[row["id"]])
-            for row in to_retry
-        ]
-        results = await run_batch(requests_payload)
+        to_retry, results = outcome.rows, outcome.results
 
         for row in to_retry:
             result = results.get(f"listing-{row['id']}")
