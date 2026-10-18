@@ -4,12 +4,33 @@
 <h1>Settings</h1>
 <p class="stats">Edits here are saved straight to .env, the same file the wizard and every script read.</p>
 {% if saved %}<p style="color:#2a8a4a; font-weight:600;">Saved.</p>{% endif %}
+{% if error %}<p style="color:#c0392b; font-weight:600;">{{ error }}</p>{% endif %}
 
 <form method="post">
+  <h2>LLM authentication</h2>
+  <p>
+    <label>
+      <input type="radio" name="LLM_AUTH_MODE" value="api" {% if values.LLM_AUTH_MODE != 'claude_code' %}checked{% endif %}>
+      Anthropic Console API key
+      <span class="hint">Metered, pay-as-you-go billing - needed for unattended/cron runs.</span>
+    </label>
+    <label>
+      <input type="radio" name="LLM_AUTH_MODE" value="claude_code" {% if values.LLM_AUTH_MODE == 'claude_code' %}checked{% endif %}>
+      Claude Code / claude.ai login
+      <span class="hint">
+        Uses your existing subscription instead of the API key below - run it yourself when you
+        want (not via cron). Requires <code>claude login</code> already done on this machine.
+      </span>
+    </label>
+  </p>
   <p>
     <label>Anthropic API key<br>
-      <input type="password" name="ANTHROPIC_API_KEY" value="{{ values.ANTHROPIC_API_KEY }}" required>
+      <input type="password" name="ANTHROPIC_API_KEY" value="{{ values.ANTHROPIC_API_KEY }}">
     </label>
+    <span class="hint">
+      Only needed for the Console API option above - ignored under Claude Code auth. Blank this
+      and save to remove a stored key once you've switched.
+    </span>
   </p>
   <p>
     <label>Contact email<br>

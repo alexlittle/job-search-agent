@@ -1,9 +1,14 @@
-"""First-run setup wizard: API key + contact email -> .env, CV upload -> profile/cv.md, a
-criteria form, and a schedule-frequency preference. Exists so someone other than the original
-author can get this running without hand-editing config files - see docs/tasks.md Phase 8 and
-docs/brief.md's follow-up decisions.
+"""First-run setup wizard: auth mode + API key (if needed) + contact email -> .env, CV upload ->
+profile/cv.md, a criteria form, and a schedule-frequency preference. Exists so someone other than
+the original author can get this running without hand-editing config files - see docs/tasks.md
+Phase 8 and docs/brief.md's follow-up decisions.
 
 The schedule step only *stores* the preference; actually running on a schedule is still Phase 17.
+
+Step 1 asks for the auth mode *first* - see claude_client.py's module docstring for what "api" vs
+"claude_code" actually changes. Choosing "claude_code" here means the API key field is never
+shown as required and nothing is ever written to ANTHROPIC_API_KEY - a fresh setup in that mode
+has no key sitting in .env to begin with, rather than relying on it being unused-but-present.
 """
 
 import asyncio
@@ -11,6 +16,7 @@ import asyncio
 from flask import Blueprint, redirect, render_template, request, url_for
 
 from job_search_agent import db
+from job_search_agent.claude_client import auth_mode
 from job_search_agent.cv_import import convert_to_markdown
 from job_search_agent.env_utils import ENV_PATH, set_env_var
 from job_search_agent.profile import DEFAULT_PROFILE_DIR, Criteria, load_criteria
@@ -29,7 +35,11 @@ def has_env_configured() -> bool:
     # Explicit path - see claude_client.require_api_key for why bare load_dotenv() isn't safe
     # under every deployment (mod_wsgi in particular).
     load_dotenv(ENV_PATH)
-    return bool(os.environ.get("ANTHROPIC_API_KEY")) and bool(os.environ.get("CONTACT_EMAIL"))
+    if not os.environ.get("CONTACT_EMAIL"):
+        return False
+    # An API key is only actually required in "api" mode - claude_code mode authenticates via
+    # the ambient `claude` CLI login instead, so there's nothing to check for here.
+    return auth_mode() == "claude_code" or bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
 def has_cv() -> bool:
@@ -63,11 +73,28 @@ def index():
 
 @onboarding_bp.route("/step1", methods=["GET", "POST"])
 def step1():
+    error = None
     if request.method == "POST":
-        set_env_var("ANTHROPIC_API_KEY", request.form.get("api_key", "").strip())
-        set_env_var("CONTACT_EMAIL", request.form.get("contact_email", "").strip())
-        return redirect(url_for("onboarding.step2"))
-    return render_template("onboarding/step1.html")
+        mode = request.form.get("auth_mode", "api")
+        if mode not in ("api", "claude_code"):
+            mode = "api"
+        contact_email = request.form.get("contact_email", "").strip()
+        api_key = request.form.get("api_key", "").strip()
+
+        if not contact_email:
+            error = "Contact email is required either way - see the hint below for why."
+        elif mode == "api" and not api_key:
+            error = "An API key is required for Console API billing - or choose Claude Code below."
+        else:
+            set_env_var("LLM_AUTH_MODE", mode)
+            set_env_var("CONTACT_EMAIL", contact_email)
+            # Only ever written in "api" mode - a claude_code setup never gets a key put into
+            # .env in the first place, rather than relying on one sitting there unused.
+            if mode == "api":
+                set_env_var("ANTHROPIC_API_KEY", api_key)
+            return redirect(url_for("onboarding.step2"))
+
+    return render_template("onboarding/step1.html", error=error, selected_mode=request.form.get("auth_mode", "api"))
 
 
 @onboarding_bp.route("/step2", methods=["GET", "POST"])

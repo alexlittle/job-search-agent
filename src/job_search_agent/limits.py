@@ -8,6 +8,7 @@ import os
 
 from dotenv import load_dotenv
 
+from job_search_agent.claude_client import auth_mode
 from job_search_agent.env_utils import ENV_PATH
 from job_search_agent.pricing import estimate_cost_usd, estimate_tokens
 
@@ -48,18 +49,38 @@ def cap_listings(rows: list, stage: str) -> list:
     return rows[:MAX_LISTINGS_PER_RUN]
 
 
-def check_spend_cap(model: str, system_text: str, user_texts: list[str], max_tokens: int) -> None:
-    """Pre-flight estimate of a batch's worst-case cost (every request generating the full
+def check_spend_cap(
+    model: str, system_text: str, user_texts: list[str], max_tokens: int, batch: bool = True
+) -> None:
+    """Pre-flight estimate of a run's worst-case cost (every request generating the full
     `max_tokens`, ignoring the discount prompt caching would give the actual bill) before it's
-    submitted. Raises SpendGuardExceeded rather than silently submitting a batch far bigger than
-    expected - deliberately erring conservative, since this is a safety net, not a cost forecast."""
+    submitted. `batch` should match how these requests will actually run - the Batches API
+    (True, the "api" auth mode's fit/haiku.py etc.) is priced 50% off vs. a synchronous
+    claude-agent-sdk call per listing (False, the "claude_code" auth mode's fallback path).
+
+    In "api" mode this raises SpendGuardExceeded rather than silently submitting something far
+    bigger than expected - a real guard against real billing. In "claude_code" mode there's no
+    real bill this is protecting against (auth_mode.__doc__), so it only prints a warning and
+    lets the run continue - MAX_LISTINGS_PER_RUN is still the volume guard that applies either
+    way."""
     system_tokens = estimate_tokens(system_text)
     total_input = sum(system_tokens + estimate_tokens(text) for text in user_texts)
     total_output = max_tokens * len(user_texts)
-    estimated = estimate_cost_usd(model, total_input, total_output, batch=True)
-    if estimated > MAX_SPEND_PER_RUN_USD:
-        raise SpendGuardExceeded(
-            f"Estimated worst-case cost for this batch (${estimated:.2f}, {len(user_texts)} "
-            f"request(s)) exceeds MAX_SPEND_PER_RUN_USD (${MAX_SPEND_PER_RUN_USD:.2f}). Raise the "
-            "limit in .env if a run this large is expected, or lower MAX_LISTINGS_PER_RUN."
+    estimated = estimate_cost_usd(model, total_input, total_output, batch=batch)
+    if estimated <= MAX_SPEND_PER_RUN_USD:
+        return
+
+    if auth_mode() == "claude_code":
+        print(
+            f"[warn] Estimated cost-equivalent for this run (${estimated:.2f}, "
+            f"{len(user_texts)} request(s)) is above MAX_SPEND_PER_RUN_USD "
+            f"(${MAX_SPEND_PER_RUN_USD:.2f}) - not a real bill under Claude Code auth, "
+            "continuing anyway."
         )
+        return
+
+    raise SpendGuardExceeded(
+        f"Estimated worst-case cost for this batch (${estimated:.2f}, {len(user_texts)} "
+        f"request(s)) exceeds MAX_SPEND_PER_RUN_USD (${MAX_SPEND_PER_RUN_USD:.2f}). Raise the "
+        "limit in .env if a run this large is expected, or lower MAX_LISTINGS_PER_RUN."
+    )

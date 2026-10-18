@@ -14,7 +14,7 @@ from pathlib import Path
 
 from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query
 
-from job_search_agent.claude_client import anthropic_env
+from job_search_agent.claude_client import sdk_env
 
 MODEL = "claude-sonnet-5"
 
@@ -62,7 +62,7 @@ async def convert_to_markdown(filename: str, raw_bytes: bytes) -> tuple[str, flo
         model=MODEL,
         max_turns=1,
         tools=[],
-        env=anthropic_env(),
+        env=sdk_env(),
     )
 
     markdown = ""

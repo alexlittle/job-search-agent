@@ -2,12 +2,33 @@
 {% block step_number %}1{% endblock %}
 {% block content %}
 <h1>Welcome</h1>
-<p>Let's get this set up. First, your Anthropic API key and contact email.</p>
+<p>Let's get this set up. First, how do you want to authenticate with Claude?</p>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
 <form method="post">
-  <label>Anthropic API key
-    <input type="password" name="api_key" required autofocus>
+  <label>
+    <input type="radio" name="auth_mode" value="api" {% if selected_mode != 'claude_code' %}checked{% endif %}>
+    Anthropic Console API key
     <span class="hint">
-      From <a href="https://platform.claude.com/" target="_blank" rel="noopener">platform.claude.com</a>
+      Metered, pay-as-you-go billing - needed if you want this to run unattended (e.g. via cron).
+      The API key field below is required for this option.
+    </span>
+  </label>
+  <label>
+    <input type="radio" name="auth_mode" value="claude_code" {% if selected_mode == 'claude_code' %}checked{% endif %}>
+    Claude Code / claude.ai login
+    <span class="hint">
+      Uses your existing Claude Code/Pro/Max subscription instead - no separate billing, but you
+      run it yourself when you want rather than on a schedule. Make sure you're already logged in
+      via <code>claude login</code> on this machine. The API key field below is ignored if you
+      pick this.
+    </span>
+  </label>
+
+  <label>Anthropic API key
+    <input type="password" name="api_key" autofocus>
+    <span class="hint">
+      Only used for the option above - from
+      <a href="https://platform.claude.com/" target="_blank" rel="noopener">platform.claude.com</a>
       (Console, not your claude.ai login). Saved to .env, never sent anywhere else.
     </span>
   </label>
@@ -15,7 +36,7 @@
     <input type="email" name="contact_email" required>
     <span class="hint">
       Sent as contact info when fetching external job sites/APIs - use your own, not the
-      original author's.
+      original author's. Needed either way.
     </span>
   </label>
   <button type="submit">Continue</button>

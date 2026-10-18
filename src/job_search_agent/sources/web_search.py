@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
-from job_search_agent.claude_client import anthropic_env, call_with_retry
+from job_search_agent.claude_client import call_with_retry, sdk_env
 from job_search_agent.listing import Listing
 from job_search_agent.profile import Criteria, load_profile
 
@@ -92,7 +92,7 @@ async def _run_search_query(role: str, criteria: Criteria) -> tuple[list[Listing
         tools=["WebSearch"],
         permission_mode="bypassPermissions",
         output_format=LISTING_SCHEMA,
-        env=anthropic_env(),
+        env=sdk_env(),
     )
 
     listings: list[Listing] = []

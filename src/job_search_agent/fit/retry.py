@@ -11,10 +11,10 @@ cost) and re-run the same Sonnet assessment with that fuller text.
 Each listing gets retried at most once, ever, by construction: regardless of outcome (resolved,
 still uncertain, or the page couldn't even be fetched), status always moves out of
 'sonnet_uncertain' before this function returns for that listing, so the next run's query for
-'sonnet_uncertain' listings won't pick it up again. The one exception is a batch-level failure
-(a transient API error, not a content judgement) - that leaves status unchanged, matching how
-fit/haiku.py and fit/sonnet.py already treat a failed batch request as "try again next run", not
-as one of this listing's real chances.
+'sonnet_uncertain' listings won't pick it up again. The one exception is a failed LLM request (a
+transient error, not a content judgement) - that leaves status unchanged, matching how
+fit/haiku.py and fit/sonnet.py already treat a failed request as "try again next run", not as one
+of this listing's real chances.
 
 A page that can't be fetched at all skips the Sonnet call entirely (no point paying for a
 re-assessment with no new information) and finalizes immediately from the original score, with the
@@ -23,7 +23,8 @@ a confident verdict - see detail_json's "uncertain"/"page_fetched" fields, shown
 via _listing_detail.html.
 
 Uses the same MAX_LISTINGS_PER_RUN/MAX_SPEND_PER_RUN_USD guards (Phase 12) as Haiku/Sonnet, since
-a successful retry is one more paid Sonnet call per listing.
+a successful retry is one more Sonnet call per listing - and the same two-transport split as
+fit/haiku.py/fit/sonnet.py, chosen by `claude_client.auth_mode()`.
 
 Run with: uv run python -m job_search_agent.fit.retry
 """
@@ -36,8 +37,10 @@ import requests
 from bs4 import BeautifulSoup
 
 from job_search_agent import db, limits
-from job_search_agent.fit import sonnet
+from job_search_agent.claude_client import auth_mode
+from job_search_agent.fit import sdk_calls, sonnet
 from job_search_agent.fit.batch_client import run_or_resume_batch
+from job_search_agent.fit.results import ListingResult
 from job_search_agent.profile import feedback_examples_context, load_profile
 from job_search_agent.user_agent import build_user_agent
 
@@ -113,11 +116,16 @@ async def run_retry_pass() -> None:
     resolved = 0
     still_uncertain = 0
     unreachable = 0
+    mode = auth_mode()
 
     with db.connect() as conn:
         feedback_context = feedback_examples_context(conn)
+        system_text = sonnet.build_system_prompt(profile, feedback_context)
 
-        def _prepare() -> tuple[list[sqlite3.Row], list[dict]] | None:
+        def _due_and_fetched() -> tuple[list[sqlite3.Row], dict[int, str]] | None:
+            """Shared prep for both transports: find due listings, fetch their full pages, and
+            finalize any that couldn't be fetched immediately (no LLM call needed for those
+            either way). Returns None once there's nothing left needing an LLM call this run."""
             nonlocal unreachable
             rows = conn.execute(
                 """
@@ -143,44 +151,97 @@ async def run_retry_pass() -> None:
 
             if not to_retry:
                 return None
+            return to_retry, page_texts
 
-            system_text = sonnet.build_system_prompt(profile, feedback_context)
+        async def _score_via_batch() -> tuple[list[sqlite3.Row], dict[str, ListingResult]] | None:
+            def _prepare() -> tuple[list[sqlite3.Row], list[dict]] | None:
+                due = _due_and_fetched()
+                if due is None:
+                    return None
+                to_retry, page_texts = due
+                user_messages = {
+                    row["id"]: build_retry_message(row, page_texts[row["id"]]) for row in to_retry
+                }
+                limits.check_spend_cap(
+                    sonnet.MODEL,
+                    system_text,
+                    list(user_messages.values()),
+                    sonnet.MAX_OUTPUT_TOKENS,
+                    batch=True,
+                )
+                requests_payload = [
+                    sonnet._batch_request(row, system_text, user_message=user_messages[row["id"]])
+                    for row in to_retry
+                ]
+                return to_retry, requests_payload
+
+            outcome = await run_or_resume_batch(conn, PENDING_BATCH_KEY, _prepare)
+            if outcome is None:
+                return None
+            return outcome.rows, {
+                cid: sonnet._from_batch_result(r) for cid, r in outcome.results.items()
+            }
+
+        async def _score_via_claude_code() -> tuple[list[sqlite3.Row], dict[str, ListingResult]] | None:
+            due = _due_and_fetched()
+            if due is None:
+                return None
+            to_retry, page_texts = due
             user_messages = {
                 row["id"]: build_retry_message(row, page_texts[row["id"]]) for row in to_retry
             }
             limits.check_spend_cap(
-                sonnet.MODEL, system_text, list(user_messages.values()), sonnet.MAX_OUTPUT_TOKENS
+                sonnet.MODEL,
+                system_text,
+                list(user_messages.values()),
+                sonnet.MAX_OUTPUT_TOKENS,
+                batch=False,
             )
-            requests_payload = [
-                sonnet._batch_request(row, system_text, user_message=user_messages[row["id"]])
-                for row in to_retry
-            ]
-            return to_retry, requests_payload
+            results: dict[str, ListingResult] = {}
+            for row in to_retry:
+                results[f"listing-{row['id']}"] = await sdk_calls.run_single(
+                    sonnet.MODEL, system_text, user_messages[row["id"]], sonnet.ASSESSMENT_SCHEMA
+                )
+            return to_retry, results
 
-        outcome = await run_or_resume_batch(conn, PENDING_BATCH_KEY, _prepare)
+        outcome = await (_score_via_claude_code() if mode == "claude_code" else _score_via_batch())
         if outcome is None:
             print(
                 f"\nRetry pass: {unreachable} listing(s) stayed uncertain (page unreachable), "
                 "0 re-scored this run."
             )
             return
-        to_retry, results = outcome.rows, outcome.results
+        to_retry, results = outcome
 
         for row in to_retry:
             result = results.get(f"listing-{row['id']}")
             if result is None or not result.succeeded:
-                reason = result.error if result else "missing from batch results"
+                reason = result.error if result else "missing result"
                 db.log_event(
                     conn,
                     stage=STAGE,
-                    message=f"Retry batch request failed: {reason} - left uncertain for next run",
+                    message=f"Retry request failed: {reason} - left uncertain for next run",
                     listing_id=row["id"],
                 )
                 conn.commit()
-                print(f"[error] {row['title'][:55]} - retry batch request {reason}")
+                print(f"[error] {row['title'][:55]} - {reason}")
                 continue
 
-            assessment = sonnet._parse_result(result)
+            try:
+                assessment = sonnet._parse_result(result)
+            except json.JSONDecodeError as exc:
+                # See fit/sonnet.py's run_sonnet_pass for why this needs to be caught here too
+                # rather than crashing the whole retry pass - a truncated response, not a content
+                # judgement, so the listing stays 'sonnet_uncertain' for next run's retry.
+                db.log_event(
+                    conn,
+                    stage=STAGE,
+                    message=f"Retry response truncated/unparseable: {exc} - left uncertain for next run",
+                    listing_id=row["id"],
+                )
+                conn.commit()
+                print(f"[error] {row['title'][:55]} - truncated/unparseable retry response")
+                continue
             bucket = assessment.bucket()
             conn.execute(
                 "UPDATE listings SET status = ? WHERE id = ?", (f"sonnet_{bucket}", row["id"])
@@ -221,10 +282,10 @@ async def run_retry_pass() -> None:
                 resolved += 1
                 print(f"[resolved,       {assessment.score:3}/{bucket:8}] {row['title'][:55]}")
 
+    label = "estimated cost, not billed" if mode == "claude_code" else "total cost, batch"
     print(
         f"\nRetry pass: {resolved} resolved, {still_uncertain} still uncertain after reading the "
-        f"full page, {unreachable} unresolved (page unreachable). (${total_cost:.4f} total cost, "
-        "batch)"
+        f"full page, {unreachable} unresolved (page unreachable). (${total_cost:.4f} {label})"
     )
 
 

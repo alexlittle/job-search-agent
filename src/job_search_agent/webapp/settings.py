@@ -1,6 +1,9 @@
-"""App-level configuration page: edit .env values (API key, contact email, Adzuna credentials),
-the fit-agent spend/volume guards (MAX_LISTINGS_PER_RUN, MAX_SPEND_PER_RUN_USD), and which
-sources are enabled - all from the dashboard instead of hand-editing config.
+"""App-level configuration page: which LLM auth mode to use (see claude_client.py's module
+docstring), .env values (API key, contact email, Adzuna credentials), the fit-agent spend/volume
+guards (MAX_LISTINGS_PER_RUN, MAX_SPEND_PER_RUN_USD), and which sources are enabled - all from
+the dashboard instead of hand-editing config. The auth-mode choice also lives in onboarding's
+step1 for a fresh setup; this is the same choice for anyone switching later without redoing the
+whole wizard.
 
 .env values write through `env_utils.set_env_var()`, same as onboarding - it updates both the
 file and this running process's environment, so a change here takes effect immediately in this
@@ -29,8 +32,11 @@ settings_bp = Blueprint("settings", __name__)
 
 # (env var, default shown when unset) - default here is display-only, matching .env.example's
 # documented defaults; the real fallback logic lives in limits.py/sources/adzuna.py.
-_REQUIRED_KEYS = ["ANTHROPIC_API_KEY", "CONTACT_EMAIL"]
+# ANTHROPIC_API_KEY is handled separately below - it's only conditionally required, depending on
+# the auth-mode choice, not a flat required/optional field like these.
+_REQUIRED_KEYS = ["CONTACT_EMAIL"]
 _OPTIONAL_KEYS = [
+    ("ANTHROPIC_API_KEY", ""),
     ("ADZUNA_APP_ID", ""),
     ("ADZUNA_APP_KEY", ""),
     ("ADZUNA_COUNTRY", "gb"),
@@ -47,6 +53,9 @@ def _current_values() -> dict[str, str]:
     values = {key: os.environ.get(key, "") for key in _REQUIRED_KEYS}
     for key, default in _OPTIONAL_KEYS:
         values[key] = os.environ.get(key) or default
+    values["LLM_AUTH_MODE"] = os.environ.get("LLM_AUTH_MODE", "api")
+    if values["LLM_AUTH_MODE"] not in ("api", "claude_code"):
+        values["LLM_AUTH_MODE"] = "api"
     return values
 
 
@@ -65,6 +74,25 @@ def _source_rows(disabled: set[str]) -> list[dict]:
 @settings_bp.route("/settings", methods=["GET", "POST"])
 def edit():
     if request.method == "POST":
+        mode = request.form.get("LLM_AUTH_MODE", "api")
+        if mode not in ("api", "claude_code"):
+            mode = "api"
+        api_key = request.form.get("ANTHROPIC_API_KEY", "").strip()
+
+        if mode == "api" and not api_key:
+            values = _current_values()
+            values["LLM_AUTH_MODE"] = mode
+            with db.connect() as conn:
+                disabled = source_registry.get_disabled(conn)
+            return render_template(
+                "settings.html",
+                values=values,
+                saved=None,
+                sources=_source_rows(disabled),
+                error="An API key is required for Console API billing - or switch to Claude Code below.",
+            )
+
+        set_env_var("LLM_AUTH_MODE", mode)
         for key in ALL_KEYS:
             set_env_var(key, request.form.get(key, "").strip())
 
@@ -83,4 +111,5 @@ def edit():
         values=_current_values(),
         saved=request.args.get("saved"),
         sources=_source_rows(disabled),
+        error=None,
     )

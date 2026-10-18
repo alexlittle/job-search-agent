@@ -26,12 +26,35 @@ that actually needs it.
 
 ## Authentication
 
-Scripts authenticate to Claude with a dedicated Anthropic Console API key (`ANTHROPIC_API_KEY` in
-`.env`, gitignored), **not** the ambient `claude` CLI login used for interactive Claude Code
-sessions on this machine. This is intentional: the project's cost-control design (spend caps,
-model tiering, Batch API) assumes metered Console billing, so every `ClaudeAgentOptions` call
-should pass the key explicitly via `env=anthropic_env()` (from `job_search_agent.claude_client`)
-rather than relying on whatever the ambient environment happens to be authenticated as.
+Two supported auth modes, chosen via `LLM_AUTH_MODE` in `.env` (`api`, the default, or
+`claude_code`) and set first thing in the onboarding wizard (step 1) or later via the dashboard's
+Settings page - see `job_search_agent.claude_client`'s module docstring for the full rationale:
+
+- **`api`** (default): scripts authenticate with a dedicated Anthropic Console API key
+  (`ANTHROPIC_API_KEY` in `.env`, gitignored), **not** the ambient `claude` CLI login used for
+  interactive Claude Code sessions on this machine. This is what the project's cost-control
+  design (spend caps, model tiering, the Batches API) assumes - metered Console billing. Every
+  `ClaudeAgentOptions` call must pass the key explicitly via `env=sdk_env()` (from
+  `job_search_agent.claude_client`) rather than relying on whatever the ambient environment
+  happens to be authenticated as; `fit/haiku.py`/`fit/sonnet.py`/`fit/retry.py`'s raw `anthropic`
+  SDK calls (the Batches API) use `require_api_key()` directly, since there's no ambient-auth
+  equivalent for that endpoint at all.
+- **`claude_code`**: `sdk_env()` returns `{}` instead of an API key, so `claude-agent-sdk` calls
+  fall through to whatever `claude` CLI session is already logged in on this machine - your own
+  Claude Code/Pro/Max subscription, no separate metered billing. Since the Batches API has no
+  subscription path, `fit/haiku.py`/`fit/sonnet.py`/`fit/retry.py` each carry a second, simpler
+  code path for this mode instead: one `claude-agent-sdk` query per listing
+  (`fit/sdk_calls.py`), losing the Batches API's 50% discount and prompt caching (irrelevant once
+  nothing's metered) but costing real Claude Code session-usage per call instead - noticeably
+  more per call than the raw token count alone suggests, since each `query()` invocation carries
+  Claude Code's own framework overhead on top of this project's prompt (confirmed empirically:
+  ~7-8k cache-creation tokens for a trivial test call). `limits.check_spend_cap` becomes
+  warn-only in this mode (nothing real to enforce against) but still logs an estimated cost via
+  `claude-agent-sdk`'s own `total_cost_usd`, labelled clearly as an estimate on the dashboard.
+  Every call site checks `auth_mode()` explicitly rather than ever inferring the mode from
+  whether an API key happens to be present - a stray leftover `ANTHROPIC_API_KEY` in `.env` must
+  never silently flip real spend back on. Onboarding's step 1 never writes one to `.env` at all
+  when this mode is chosen, for the same reason.
 
 Similarly, `CONTACT_EMAIL` in `.env` is required before any HTTP fetch to an external site/API —
 built into a User-Agent string via `job_search_agent.user_agent.build_user_agent()` — so that
@@ -74,10 +97,13 @@ A few design decisions that shape how new code should fit in:
   optional hardening. The fit-agent stages (Phase 6/7) were built first as ordinary synchronous
   `claude-agent-sdk` calls, then switched to the Anthropic Message Batches API in Phase 12 — that
   was a deliberate two-step sequence (get it working, then make it cheaper), not an oversight.
-- **`fit/haiku.py` and `fit/sonnet.py` use the plain `anthropic` SDK, not `claude-agent-sdk`**
-  (Phase 12) — `claude-agent-sdk` doesn't expose batch submission, and these two are the only
-  agents in the pipeline where every request is independent and none needs an instant answer, so
-  they're the ones worth batching (50% cheaper). Each run builds one Batches API request per
+- **`fit/haiku.py` and `fit/sonnet.py` use the plain `anthropic` SDK, not `claude-agent-sdk`, in
+  "api" auth mode** (Phase 12; see "Authentication" above for the later-added `claude_code` mode,
+  which uses `claude-agent-sdk` per-listing instead via `fit/sdk_calls.py` since the Batches API
+  below has no subscription equivalent) — `claude-agent-sdk` doesn't expose batch submission, and
+  these two are the only agents in the pipeline where every request is independent and none needs
+  an instant answer, so they're the ones worth batching (50% cheaper) in "api" mode. Each run
+  builds one Batches API request per
   listing (`fit/batch_client.py`), submits them together, and polls
   (`MAX_POLL_SECONDS = 1800`) until done; a request that errors is logged and skipped rather than
   retried, since the next run's query naturally picks it back up. `web_search.py` still uses

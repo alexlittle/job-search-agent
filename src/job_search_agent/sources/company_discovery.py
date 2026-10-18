@@ -18,7 +18,7 @@ import asyncio
 
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
-from job_search_agent.claude_client import anthropic_env, call_with_retry
+from job_search_agent.claude_client import call_with_retry, sdk_env
 from job_search_agent.company_lead import CompanyLead
 from job_search_agent.profile import Profile, load_profile
 from job_search_agent.sources.web_search import SearchCost
@@ -101,7 +101,7 @@ async def _run_discovery(profile: Profile, feedback_context: str) -> tuple[list[
         tools=["WebSearch"],
         permission_mode="bypassPermissions",
         output_format=COMPANY_SCHEMA,
-        env=anthropic_env(),
+        env=sdk_env(),
     )
 
     leads: list[CompanyLead] = []

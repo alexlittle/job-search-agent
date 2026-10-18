@@ -4,11 +4,15 @@ looks at what this stage doesn't rule out, so a wrong "no" here is costly (the l
 a proper look) while a wrong "yes"/"maybe" just costs a bit of Sonnet budget later. The prompt
 reflects that asymmetry explicitly.
 
-Runs as one Anthropic Message Batches API call (Phase 12) rather than one query per listing - 50%
-cheaper for the same requests, via the plain `anthropic` SDK (see `fit/batch_client.py`) rather
-than `claude-agent-sdk`, which doesn't expose batch submission. The CV/criteria/feedback block is
-identical for every listing in a run, so it goes in `system` with a prompt-caching breakpoint
-rather than being repeated in each listing's own message.
+Two transports, chosen by `claude_client.auth_mode()` (see its module docstring):
+- "api" (default): one Anthropic Message Batches API call (Phase 12) covering every pending
+  listing - 50% cheaper than one query per listing, via the plain `anthropic` SDK
+  (`fit/batch_client.py`) rather than `claude-agent-sdk`, which doesn't expose batch submission.
+- "claude_code": no Batches API equivalent exists for subscription auth, so this falls back to
+  one `claude-agent-sdk` query per listing (`fit/sdk_calls.py`).
+Either way the CV/criteria/feedback block is identical for every listing in a run, so it's built
+once as `system_text` rather than repeated per listing; the Batches path also gets a
+prompt-caching breakpoint on it, which the per-listing path can't take equivalent advantage of.
 
 Run with: uv run python -m job_search_agent.fit.haiku
 """
@@ -18,7 +22,10 @@ import json
 import sqlite3
 
 from job_search_agent import db, limits
+from job_search_agent.claude_client import auth_mode
+from job_search_agent.fit import sdk_calls
 from job_search_agent.fit.batch_client import BatchResult, run_or_resume_batch
+from job_search_agent.fit.results import ListingResult
 from job_search_agent.profile import Profile, feedback_examples_context, load_profile
 from job_search_agent.pricing import estimate_cost_usd
 
@@ -77,11 +84,10 @@ def _batch_request(listing: sqlite3.Row, system_text: str) -> dict:
     }
 
 
-def _parse_result(result: BatchResult) -> tuple[str, str, float, int, int]:
+def _from_batch_result(result: BatchResult) -> ListingResult:
+    if not result.succeeded:
+        return ListingResult(succeeded=False, error=result.error)
     text = next(b.text for b in result.message.content if b.type == "text")
-    parsed = json.loads(text)
-    verdict = parsed.get("verdict", "no")
-    reason = parsed.get("reason", "No response")
     usage = result.message.usage
     cost_usd = estimate_cost_usd(
         MODEL,
@@ -90,45 +96,105 @@ def _parse_result(result: BatchResult) -> tuple[str, str, float, int, int]:
         cache_creation_input_tokens=usage.cache_creation_input_tokens or 0,
         cache_read_input_tokens=usage.cache_read_input_tokens or 0,
     )
-    return verdict, reason, cost_usd, usage.input_tokens, usage.output_tokens
+    return ListingResult(
+        succeeded=True,
+        raw_json=text,
+        cost_usd=cost_usd,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+    )
+
+
+def _parse_result(result: ListingResult) -> tuple[str, str, float, int, int]:
+    parsed = json.loads(result.raw_json)
+    verdict = parsed.get("verdict", "no")
+    reason = parsed.get("reason", "No response")
+    return verdict, reason, result.cost_usd, result.input_tokens or 0, result.output_tokens or 0
+
+
+async def _score_via_batch(
+    conn, system_text: str
+) -> tuple[list[sqlite3.Row], dict[str, ListingResult]] | None:
+    def _prepare() -> tuple[list[sqlite3.Row], list[dict]] | None:
+        rows = conn.execute("SELECT * FROM listings WHERE status = 'pending_fit'").fetchall()
+        if not rows:
+            print("No listings pending a Haiku pass.")
+            return None
+        rows = limits.cap_listings(rows, stage=STAGE)
+        user_texts = [build_user_message(row) for row in rows]
+        limits.check_spend_cap(MODEL, system_text, user_texts, MAX_OUTPUT_TOKENS, batch=True)
+        return rows, [_batch_request(row, system_text) for row in rows]
+
+    outcome = await run_or_resume_batch(conn, PENDING_BATCH_KEY, _prepare)
+    if outcome is None:
+        return None
+    return outcome.rows, {cid: _from_batch_result(r) for cid, r in outcome.results.items()}
+
+
+async def _score_via_claude_code(
+    conn, system_text: str
+) -> tuple[list[sqlite3.Row], dict[str, ListingResult]] | None:
+    rows = conn.execute("SELECT * FROM listings WHERE status = 'pending_fit'").fetchall()
+    if not rows:
+        print("No listings pending a Haiku pass.")
+        return None
+    rows = limits.cap_listings(rows, stage=STAGE)
+    user_texts = [build_user_message(row) for row in rows]
+    limits.check_spend_cap(MODEL, system_text, user_texts, MAX_OUTPUT_TOKENS, batch=False)
+
+    results: dict[str, ListingResult] = {}
+    for row in rows:
+        results[f"listing-{row['id']}"] = await sdk_calls.run_single(
+            MODEL, system_text, build_user_message(row), VERDICT_SCHEMA
+        )
+    return rows, results
 
 
 async def run_haiku_pass() -> None:
     profile = load_profile()
     total_cost = 0.0
     counts = {"yes": 0, "maybe": 0, "no": 0}
+    mode = auth_mode()
 
     with db.connect() as conn:
         feedback_context = feedback_examples_context(conn)
+        system_text = build_system_prompt(profile, feedback_context)
 
-        def _prepare() -> tuple[list[sqlite3.Row], list[dict]] | None:
-            rows = conn.execute("SELECT * FROM listings WHERE status = 'pending_fit'").fetchall()
-            if not rows:
-                print("No listings pending a Haiku pass.")
-                return None
-            rows = limits.cap_listings(rows, stage=STAGE)
-            system_text = build_system_prompt(profile, feedback_context)
-            user_texts = [build_user_message(row) for row in rows]
-            limits.check_spend_cap(MODEL, system_text, user_texts, MAX_OUTPUT_TOKENS)
-            return rows, [_batch_request(row, system_text) for row in rows]
-
-        outcome = await run_or_resume_batch(conn, PENDING_BATCH_KEY, _prepare)
+        outcome = (
+            await _score_via_claude_code(conn, system_text)
+            if mode == "claude_code"
+            else await _score_via_batch(conn, system_text)
+        )
         if outcome is None:
             return
-        rows, results = outcome.rows, outcome.results
+        rows, results = outcome
 
         for row in rows:
             result = results.get(f"listing-{row['id']}")
             if result is None or not result.succeeded:
-                reason = result.error if result else "missing from batch results"
+                reason = result.error if result else "missing result"
                 db.log_event(
-                    conn, stage=STAGE, message=f"Batch request failed: {reason}", listing_id=row["id"]
+                    conn, stage=STAGE, message=f"Request failed: {reason}", listing_id=row["id"]
                 )
                 conn.commit()
-                print(f"[error] {row['title'][:60]} - batch request {reason}")
+                print(f"[error] {row['title'][:60]} - {reason}")
                 continue
 
-            verdict, reason, cost_usd, in_tok, out_tok = _parse_result(result)
+            try:
+                verdict, reason, cost_usd, in_tok, out_tok = _parse_result(result)
+            except json.JSONDecodeError as exc:
+                # See fit/sonnet.py's run_sonnet_pass for the full rationale - a response cut off
+                # mid-JSON shouldn't crash the whole pass, just leave this one listing for next
+                # run. Less likely here (Haiku's schema is tiny), but the same class of bug.
+                db.log_event(
+                    conn,
+                    stage=STAGE,
+                    message=f"Response truncated/unparseable: {exc}",
+                    listing_id=row["id"],
+                )
+                conn.commit()
+                print(f"[error] {row['title'][:60]} - truncated/unparseable response")
+                continue
             conn.execute(
                 "UPDATE listings SET status = ? WHERE id = ?",
                 (f"haiku_{verdict}", row["id"]),
@@ -149,10 +215,11 @@ async def run_haiku_pass() -> None:
             counts[verdict] = counts.get(verdict, 0) + 1
             print(f"[{verdict:>5}] {row['title'][:60]} - {reason}")
 
+    label = "estimated cost, not billed" if mode == "claude_code" else "total cost, batch"
     print(
         f"\nScored {sum(counts.values())} listing(s): "
         f"{counts['yes']} yes, {counts['maybe']} maybe, {counts['no']} no. "
-        f"(${total_cost:.4f} total cost, batch)"
+        f"(${total_cost:.4f} {label})"
     )
 
 

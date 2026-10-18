@@ -1,11 +1,12 @@
 """Detailed fit judgement: Sonnet reads a listing, the user's profile, and Haiku's coarse
 verdict, then gives a scored, itemised assessment. Only runs on what Haiku's coarse pass (Phase
 6) didn't rule out - the whole point of model tiering is that the pricier model only ever sees
-the subset worth a careful look.
+the subset worth a careful look (still true under Claude Code auth too, even without a $ saving -
+see fit/haiku.py's docstring on why tiering stays either way).
 
-Runs as one Anthropic Message Batches API call (Phase 12) rather than one query per listing - see
-`fit/haiku.py`'s docstring for why (50% cheaper, plain `anthropic` SDK, shared CV/criteria/
-feedback block cached in `system` rather than repeated per listing).
+Two transports, chosen by `claude_client.auth_mode()` - see `fit/haiku.py`'s docstring for the
+full explanation (50% cheaper Batches API in "api" mode via the plain `anthropic` SDK, one
+`claude-agent-sdk` query per listing in "claude_code" mode).
 
 Run with: uv run python -m job_search_agent.fit.sonnet
 """
@@ -16,13 +17,22 @@ import sqlite3
 from dataclasses import dataclass, field
 
 from job_search_agent import db, limits
+from job_search_agent.claude_client import auth_mode
+from job_search_agent.fit import sdk_calls
 from job_search_agent.fit.batch_client import BatchResult, run_or_resume_batch
+from job_search_agent.fit.results import ListingResult
 from job_search_agent.profile import Profile, feedback_examples_context, load_profile
 from job_search_agent.pricing import estimate_cost_usd
 
 MODEL = "claude-sonnet-5"
 STAGE = "sonnet"
-MAX_OUTPUT_TOKENS = 1024
+# Was 1024 - real-world testing (2026-09-28) found ~40% of real responses (score +
+# matched_criteria + concerns + rationale) were truncated mid-JSON at that cap, wasting the
+# whole request (unusable output, still billed, then needs a retry-pass call on top). Only
+# actually enforced in "api" mode's Batches request - claude-agent-sdk (fit/sdk_calls.py,
+# "claude_code" mode) has no equivalent per-response token cap to pass at all, so this constant
+# only affects the spend-cap estimate there, not a real limit.
+MAX_OUTPUT_TOKENS = 2048
 PENDING_BATCH_KEY = "pending_batch:sonnet"
 
 ASSESSMENT_SCHEMA = {
@@ -108,9 +118,10 @@ def _batch_request(listing: sqlite3.Row, system_text: str, user_message: str | N
     }
 
 
-def _parse_result(result: BatchResult) -> Assessment:
+def _from_batch_result(result: BatchResult) -> ListingResult:
+    if not result.succeeded:
+        return ListingResult(succeeded=False, error=result.error)
     text = next(b.text for b in result.message.content if b.type == "text")
-    out = json.loads(text)
     usage = result.message.usage
     cost_usd = estimate_cost_usd(
         MODEL,
@@ -119,6 +130,17 @@ def _parse_result(result: BatchResult) -> Assessment:
         cache_creation_input_tokens=usage.cache_creation_input_tokens or 0,
         cache_read_input_tokens=usage.cache_read_input_tokens or 0,
     )
+    return ListingResult(
+        succeeded=True,
+        raw_json=text,
+        cost_usd=cost_usd,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+    )
+
+
+def _parse_result(result: ListingResult) -> Assessment:
+    out = json.loads(result.raw_json)
     return Assessment(
         # The raw Messages API's structured-output schema doesn't support integer min/max (unlike
         # claude-agent-sdk's output_format, which tolerated it) - the 0-100 range is prompted for
@@ -128,60 +150,112 @@ def _parse_result(result: BatchResult) -> Assessment:
         concerns=out.get("concerns", []),
         rationale=out.get("rationale", "No response"),
         uncertain=bool(out.get("uncertain", False)),
-        cost_usd=cost_usd,
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
+        cost_usd=result.cost_usd,
+        input_tokens=result.input_tokens or 0,
+        output_tokens=result.output_tokens or 0,
     )
+
+
+def _due_rows(conn) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT listings.*, verdicts.verdict AS haiku_verdict, verdicts.reason AS haiku_reason
+        FROM listings
+        JOIN verdicts ON verdicts.listing_id = listings.id AND verdicts.stage = 'haiku'
+        WHERE listings.status IN ('haiku_yes', 'haiku_maybe')
+        """
+    ).fetchall()
+
+
+async def _score_via_batch(
+    conn, system_text: str
+) -> tuple[list[sqlite3.Row], dict[str, ListingResult]] | None:
+    def _prepare() -> tuple[list[sqlite3.Row], list[dict]] | None:
+        rows = _due_rows(conn)
+        if not rows:
+            print("No listings pending a Sonnet pass.")
+            return None
+        rows = limits.cap_listings(rows, stage=STAGE)
+        user_texts = [build_user_message(row) for row in rows]
+        limits.check_spend_cap(MODEL, system_text, user_texts, MAX_OUTPUT_TOKENS, batch=True)
+        return rows, [_batch_request(row, system_text) for row in rows]
+
+    outcome = await run_or_resume_batch(conn, PENDING_BATCH_KEY, _prepare)
+    if outcome is None:
+        return None
+    return outcome.rows, {cid: _from_batch_result(r) for cid, r in outcome.results.items()}
+
+
+async def _score_via_claude_code(
+    conn, system_text: str
+) -> tuple[list[sqlite3.Row], dict[str, ListingResult]] | None:
+    rows = _due_rows(conn)
+    if not rows:
+        print("No listings pending a Sonnet pass.")
+        return None
+    rows = limits.cap_listings(rows, stage=STAGE)
+    user_texts = [build_user_message(row) for row in rows]
+    limits.check_spend_cap(MODEL, system_text, user_texts, MAX_OUTPUT_TOKENS, batch=False)
+
+    results: dict[str, ListingResult] = {}
+    for row in rows:
+        results[f"listing-{row['id']}"] = await sdk_calls.run_single(
+            MODEL, system_text, build_user_message(row), ASSESSMENT_SCHEMA
+        )
+    return rows, results
 
 
 async def run_sonnet_pass() -> None:
     profile = load_profile()
     total_cost = 0.0
     scored = 0
+    mode = auth_mode()
 
     with db.connect() as conn:
         feedback_context = feedback_examples_context(conn)
+        system_text = build_system_prompt(profile, feedback_context)
         # Informational only (the cost-comparison print at the end) - computed unconditionally
         # so it's still accurate whether this run resumes a leftover batch or submits a fresh one.
         pending_count = conn.execute(
             "SELECT COUNT(*) FROM listings WHERE status LIKE 'haiku_%'"
         ).fetchone()[0]
 
-        def _prepare() -> tuple[list[sqlite3.Row], list[dict]] | None:
-            rows = conn.execute(
-                """
-                SELECT listings.*, verdicts.verdict AS haiku_verdict, verdicts.reason AS haiku_reason
-                FROM listings
-                JOIN verdicts ON verdicts.listing_id = listings.id AND verdicts.stage = 'haiku'
-                WHERE listings.status IN ('haiku_yes', 'haiku_maybe')
-                """
-            ).fetchall()
-            if not rows:
-                print("No listings pending a Sonnet pass.")
-                return None
-            rows = limits.cap_listings(rows, stage=STAGE)
-            system_text = build_system_prompt(profile, feedback_context)
-            user_texts = [build_user_message(row) for row in rows]
-            limits.check_spend_cap(MODEL, system_text, user_texts, MAX_OUTPUT_TOKENS)
-            return rows, [_batch_request(row, system_text) for row in rows]
-
-        outcome = await run_or_resume_batch(conn, PENDING_BATCH_KEY, _prepare)
+        outcome = (
+            await _score_via_claude_code(conn, system_text)
+            if mode == "claude_code"
+            else await _score_via_batch(conn, system_text)
+        )
         if outcome is None:
             return
-        rows, results = outcome.rows, outcome.results
+        rows, results = outcome
 
         for row in rows:
             result = results.get(f"listing-{row['id']}")
             if result is None or not result.succeeded:
-                reason = result.error if result else "missing from batch results"
+                reason = result.error if result else "missing result"
                 db.log_event(
-                    conn, stage=STAGE, message=f"Batch request failed: {reason}", listing_id=row["id"]
+                    conn, stage=STAGE, message=f"Request failed: {reason}", listing_id=row["id"]
                 )
                 conn.commit()
-                print(f"[error] {row['title'][:55]} - batch request {reason}")
+                print(f"[error] {row['title'][:55]} - {reason}")
                 continue
 
-            assessment = _parse_result(result)
+            try:
+                assessment = _parse_result(result)
+            except json.JSONDecodeError as exc:
+                # A response cut off mid-JSON (hit MAX_OUTPUT_TOKENS before finishing) - a real,
+                # not-rare failure mode found in live testing (2026-09-28, ~40% of one batch).
+                # Treat it the same as any other failed request: log it and leave the listing
+                # for next run, rather than letting json.loads() crash this whole pass.
+                db.log_event(
+                    conn,
+                    stage=STAGE,
+                    message=f"Response truncated/unparseable: {exc}",
+                    listing_id=row["id"],
+                )
+                conn.commit()
+                print(f"[error] {row['title'][:55]} - truncated/unparseable response")
+                continue
             bucket = assessment.bucket()
             # An "uncertain" verdict (Phase 14: description too thin to judge confidently) is
             # left in an intermediate status rather than a normal strong/possible/weak bucket, so
@@ -231,17 +305,21 @@ async def run_sonnet_pass() -> None:
             for c in assessment.concerns:
                 print(f"    ? {c}")
 
-    print(f"\nScored {scored} listing(s) with Sonnet. (${total_cost:.4f} total cost, batch)")
+    label = "estimated cost, not billed" if mode == "claude_code" else "total cost, batch"
+    print(f"\nScored {scored} listing(s) with Sonnet. (${total_cost:.4f} {label})")
     if scored:
         per_item = total_cost / scored
         projected_all = per_item * pending_count
         saved = projected_all - total_cost
         skipped = pending_count - scored
+        saving_note = (
+            "fewer, cheaper session calls" if mode == "claude_code" else f"${saved:.4f} saved"
+        )
         print(
             f"Haiku screened out {skipped} of {pending_count} pre-filtered listing(s) as 'no', "
             f"so Sonnet only scored {scored}. Estimated cost if Sonnet had scored all "
-            f"{pending_count} instead: ${projected_all:.4f} - roughly ${saved:.4f} saved by "
-            f"tiering models."
+            f"{pending_count} instead: ${projected_all:.4f} - roughly {saving_note} by tiering "
+            "models."
         )
 
 
