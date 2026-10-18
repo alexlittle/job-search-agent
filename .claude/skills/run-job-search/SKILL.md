@@ -15,7 +15,7 @@ Before running either agent, verify the essentials exist:
 ls .env profile/cv.md
 ```
 
-Both files are required — `.env` holds `ANTHROPIC_API_KEY` and `CONTACT_EMAIL`, and `profile/cv.md` is the candidate profile the agents score against. If either is missing, tell the user and stop.
+Both files are required — `.env` holds `LLM_AUTH_MODE` and `CONTACT_EMAIL` (plus `ANTHROPIC_API_KEY`, but only when `LLM_AUTH_MODE=api`; in `claude_code` mode there is deliberately no key), and `profile/cv.md` is the candidate profile the agents score against. If either file is missing, tell the user and stop. Don't treat a missing `ANTHROPIC_API_KEY` as an error in `claude_code` mode.
 
 ## The two agents
 
@@ -54,12 +54,15 @@ This agent can be disabled from the dashboard's Settings page — if disabled, i
 When asked to run both, start them as background processes so they run in parallel:
 
 ```bash
-uv run python -m job_search_agent.coordinator &
+mkdir -p logs
+uv run python -m job_search_agent.coordinator > logs/coordinator.log 2>&1 &
 COORD_PID=$!
-uv run python -m job_search_agent.companies &
+uv run python -m job_search_agent.companies > logs/companies.log 2>&1 &
 COMPANY_PID=$!
 echo "Coordinator PID: $COORD_PID | Company discovery PID: $COMPANY_PID"
 ```
+
+Redirecting output to log files means the results can be read after the processes finish. Note that shell variables don't persist between separate tool calls, so when checking back later use `pgrep -af "\.venv/bin/python -m job_search_agent"` rather than the saved PIDs. A "background command completed" notification only means the launching shell exited, not that the agents finished.
 
 ### Monitoring
 
@@ -108,6 +111,6 @@ The pipeline uses real Anthropic API credits. Key cost controls:
 
 - **Web search** is the most expensive part of the coordinator — suggest `--no-web-search` for quick/cheap runs unless the user specifically wants it
 - `MAX_SPEND_PER_RUN_USD` (default $2.00) and `MAX_LISTINGS_PER_RUN` (default 50) are configurable in `.env`
-- Company discovery uses a single Haiku agent call with web search — typically a few cents
+- Company discovery is a single web-search agent call, but it still costs roughly $0.55–0.60 per run in practice (observed on real runs); a full coordinator run with web search was about $4 including the retry pass
 
 Always mention the cost in the completion report so the user can track spend.
