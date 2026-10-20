@@ -620,17 +620,17 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=1.8.0" },
-    { name = "beautifulsoup4", specifier = ">=4.15.0" },
-    { name = "claude-agent-sdk", specifier = ">=0.1.0" },
-    { name = "feedparser", specifier = ">=6.0.14" },
-    { name = "flask", specifier = ">=3.1.3" },
-    { name = "mod-wsgi", specifier = ">=6.1.0" },
-    { name = "pypdf", specifier = ">=6.19.0" },
-    { name = "python-docx", specifier = ">=1.2.0" },
-    { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "requests", specifier = ">=2.34.2" },
+    { name = "anthropic", specifier = "==1.8.0" },
+    { name = "beautifulsoup4", specifier = "==4.15.0" },
+    { name = "claude-agent-sdk", specifier = "==0.2.159" },
+    { name = "feedparser", specifier = "==6.0.14" },
+    { name = "flask", specifier = "==3.1.3" },
+    { name = "mod-wsgi", specifier = "==6.1.1" },
+    { name = "pypdf", specifier = "==6.19.0" },
+    { name = "python-docx", specifier = "==1.2.0" },
+    { name = "python-dotenv", specifier = "==1.2.3" },
+    { name = "pyyaml", specifier = "==6.0.3" },
+    { name = "requests", specifier = "==2.34.2" },
 ]
 
 [[package]]
@@ -873,9 +873,9 @@ wheels = [
 
 [[package]]
 name = "mod-wsgi"
-version = "6.1.0"
+version = "6.1.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/12/b1/867ada6512f6cfc8cb599b4e18475ffd8e4ff9ebcc68d22800ec6d3025e3/mod_wsgi-6.1.0.tar.gz", hash = "sha256:9ebb645c899ea6461edf27872c11a6a12c6e819edbcc3652e0b6195d990aa31c", size = 607759, upload-time = "2026-09-26T23:19:43.484Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/77/a9e8ccb74cb748f3a71a01f84f524b85a8f91d9e09cb0405f01311db78e2/mod_wsgi-6.1.1.tar.gz", hash = "sha256:a42d11ba45d2050ab456a474d034e938605ca76386233ef404daa8b0388ca60e", size = 609760, upload-time = "2026-10-13T23:09:25.262Z" }
 
 [[package]]
 name = "opentelemetry-api"
