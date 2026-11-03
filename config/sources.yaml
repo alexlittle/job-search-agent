@@ -39,3 +39,9 @@ feeds:
     query: {}
     title_format: "company_colon_title"
     location: "field:region"
+
+  - name: django_job_board
+    url: "https://djangojobboard.com/feed/rss/"
+    query: {}
+    title_format: "plain"
+    location: "none"
